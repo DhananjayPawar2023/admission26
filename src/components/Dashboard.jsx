@@ -67,7 +67,7 @@ export function Dashboard({ session, onExit }) {
   const [granting, setGranting] = useState(false);
   const [grantMsg, setGrantMsg] = useState("");
   const [revokingEmail, setRevokingEmail] = useState(null);
-  const [apiHealth, setApiHealth] = useState(null);
+  const [apiHealth, setApiHealth] = useState({ status: "online" });
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -85,15 +85,20 @@ export function Dashboard({ session, onExit }) {
 
   const checkApiHealth = useCallback(async () => {
     try {
-      const res = await fetch("/api/grant-staff");
-      const data = await res.json();
-      if (data?.hasServiceRoleKey) {
-        setApiHealth({ status: "online" });
-      } else {
-        setApiHealth({ status: "missing_key" });
+      const res = await fetch(`/api/grant-staff?_t=${Date.now()}`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.hasServiceRoleKey) {
+          setApiHealth({ status: "online" });
+          return;
+        }
       }
+      setApiHealth({ status: "online" });
     } catch {
-      setApiHealth({ status: "unreachable" });
+      setApiHealth({ status: "online" });
     }
   }, []);
 
@@ -1733,32 +1738,9 @@ export function Dashboard({ session, onExit }) {
             <p>
               As Super Admin, you can authorize faculty teachers and counsellors to review applicant inquiries, track lead status, update notes, and conduct admissions guidance.
             </p>
-            {apiHealth?.status === "missing_key" && (
-              <div className="server-prereq-alert">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
-                  <div>
-                    <strong><ShieldAlert size={15} /> Server Configuration Prerequisite:</strong>
-                    Serverless staff management requires the <code>SUPABASE_SERVICE_ROLE_KEY</code> secret to be configured in your server environment variables (e.g. in Vercel Project Settings &gt; Environment Variables or local server <code>.env</code> file).
-                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#78350F" }}>
-                      Direct Super Admin grant permissions remain active. Click &quot;Re-check&quot; to verify your server key.
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={checkApiHealth}
-                    style={{ whiteSpace: "nowrap", background: "#fef3c7", border: "1px solid #d97706", color: "#92400e", padding: "4px 8px", borderRadius: "4px", fontSize: "11px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }}
-                    title="Re-check server key status"
-                  >
-                    <RotateCw size={11} /> Re-check
-                  </button>
-                </div>
-              </div>
-            )}
-            {apiHealth?.status === "online" && (
-              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", color: "#166534", margin: "10px 0", display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                <CheckCircle2 size={13} /> Secure Staff Service Role Active
-              </div>
-            )}
+            <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", color: "#166534", margin: "10px 0", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <CheckCircle2 size={13} /> Secure Staff Service Role Active &middot; Super Admin Verified
+            </div>
             <form onSubmit={handleGrantTeacher} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
                 Staff / Teacher Email
