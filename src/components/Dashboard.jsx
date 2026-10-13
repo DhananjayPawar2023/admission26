@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -83,22 +83,23 @@ export function Dashboard({ session, onExit }) {
 
   const userEmail = session?.user?.email || "";
 
-  useEffect(() => {
-    if (activeTab === "teachers") {
-      fetch("/api/grant-staff")
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.hasServiceRoleKey) {
-            setApiHealth({ status: "online" });
-          } else {
-            setApiHealth({ status: "missing_key" });
-          }
-        })
-        .catch(() => {
-          setApiHealth({ status: "unreachable" });
-        });
+  const checkApiHealth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/grant-staff");
+      const data = await res.json();
+      if (data?.hasServiceRoleKey) {
+        setApiHealth({ status: "online" });
+      } else {
+        setApiHealth({ status: "missing_key" });
+      }
+    } catch {
+      setApiHealth({ status: "unreachable" });
     }
-  }, [activeTab]);
+  }, []);
+
+  useEffect(() => {
+    checkApiHealth();
+  }, [checkApiHealth, activeTab]);
 
   useEffect(() => {
     if (!supabase || !session) return;
@@ -595,13 +596,12 @@ export function Dashboard({ session, onExit }) {
           setNewTeacherEmail("");
           setNewTeacherName("");
           setGranting(false);
+          checkApiHealth();
           return;
         }
 
-        if (rpcErr && rpcErr.message && !rpcErr.message.includes("not found")) {
-          setGrantMsg(`Notice: ${rpcErr.message}`);
-          setGranting(false);
-          return;
+        if (rpcErr) {
+          console.warn("Direct RPC note (falling through to serverless grant):", rpcErr.message);
         }
       } catch (err) {
         console.warn("Direct RPC error:", err);
@@ -1735,10 +1735,22 @@ export function Dashboard({ session, onExit }) {
             </p>
             {apiHealth?.status === "missing_key" && (
               <div className="server-prereq-alert">
-                <strong><ShieldAlert size={15} /> Server Configuration Prerequisite:</strong>
-                Serverless staff management requires the <code>SUPABASE_SERVICE_ROLE_KEY</code> secret to be configured in your server environment variables (e.g. in Vercel Project Settings &gt; Environment Variables or local server <code>.env</code> file).
-                <div style={{ marginTop: "6px", fontSize: "11px", color: "#78350F" }}>
-                  Staff invitations are disabled until this server environment variable is configured by the project owner.
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                  <div>
+                    <strong><ShieldAlert size={15} /> Server Configuration Prerequisite:</strong>
+                    Serverless staff management requires the <code>SUPABASE_SERVICE_ROLE_KEY</code> secret to be configured in your server environment variables (e.g. in Vercel Project Settings &gt; Environment Variables or local server <code>.env</code> file).
+                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#78350F" }}>
+                      Direct Super Admin grant permissions remain active. Click &quot;Re-check&quot; to verify your server key.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={checkApiHealth}
+                    style={{ whiteSpace: "nowrap", background: "#fef3c7", border: "1px solid #d97706", color: "#92400e", padding: "4px 8px", borderRadius: "4px", fontSize: "11px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                    title="Re-check server key status"
+                  >
+                    <RotateCw size={11} /> Re-check
+                  </button>
                 </div>
               </div>
             )}
@@ -1801,16 +1813,11 @@ export function Dashboard({ session, onExit }) {
               <button
                 type="submit"
                 className="primary-button"
-                disabled={granting || apiHealth?.status === "missing_key"}
+                disabled={granting}
                 style={{ marginTop: "8px", justifyContent: "center" }}
-                title={apiHealth?.status === "missing_key" ? "Action disabled: SUPABASE_SERVICE_ROLE_KEY required in server environment." : undefined}
               >
                 <UserPlus size={15} />{" "}
-                {granting
-                  ? "Granting..."
-                  : apiHealth?.status === "missing_key"
-                  ? "Action Disabled (Missing Server Key)"
-                  : "Grant Staff Access"}
+                {granting ? "Granting..." : "Grant Staff Access"}
               </button>
               {grantMsg && (
                 <div style={{ padding: "8px 12px", borderRadius: "6px", background: grantMsg.includes("granted") || grantMsg.includes("recorded") ? "#ecfdf5" : "#fff7ed", border: "1px solid " + (grantMsg.includes("granted") || grantMsg.includes("recorded") ? "#a7f3d0" : "#fed7aa"), color: grantMsg.includes("granted") || grantMsg.includes("recorded") ? "#065f46" : "#9a3412", fontSize: "12px", fontWeight: 600 }}>

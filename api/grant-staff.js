@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getServiceRoleKey, getSupabaseUrl } from "./env-helper.js";
 
 export default async function handler(req, res, { supabaseAdminClient } = {}) {
   res.setHeader("Access-Control-Allow-Credentials", true);
@@ -15,12 +16,8 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
 
   // Health check endpoint (does not perform any mutations)
   if (req.method === "GET") {
-    const hasKey = Boolean(
-      process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.SERVICE_ROLE_KEY ||
-      process.env.SUPABASE_SERVICE_KEY ||
-      process.env.SUPABASE_SERVICE_ROLE
-    );
+    const serviceRoleKey = getServiceRoleKey();
+    const hasKey = Boolean(serviceRoleKey);
     return res.status(200).json({
       status: "online",
       hasServiceRoleKey: hasKey
@@ -41,17 +38,8 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
     });
   }
 
-  const supabaseUrl =
-    process.env.VITE_SUPABASE_URL ||
-    process.env.SUPABASE_URL ||
-    "https://hwonxgtqessyuakdgyfw.supabase.co";
-
-  const serviceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE ||
-    process.env.SERVICE_ROLE;
+  const supabaseUrl = getSupabaseUrl();
+  const serviceRoleKey = getServiceRoleKey();
 
   if (!supabaseUrl) {
     return res.status(500).json({

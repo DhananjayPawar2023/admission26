@@ -7,6 +7,8 @@
  * - Enforces strict server-side secret management: NEVER uses VITE_ prefixes or logs API keys.
  */
 
+import { getResendApiKey } from "./env-helper.js";
+
 export function getStatusDetails(status) {
   const s = (status || "").toLowerCase().trim();
   switch (s) {
@@ -326,7 +328,7 @@ export async function sendEmailNotification({
   }
 
   // 2. Check Resend API Key
-  const resendApiKey = process.env.RESEND_API_KEY;
+  const resendApiKey = process.env.RESEND_API_KEY || getResendApiKey();
   const fromEmail = process.env.EMAIL_FROM || "IICT Admissions <onboarding@resend.dev>";
 
   if (resendApiKey) {

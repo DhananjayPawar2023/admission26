@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { buildApplicationStatusEmail, sendEmailNotification } from "./email-service.js";
+import { getServiceRoleKey, getSupabaseUrl } from "./env-helper.js";
 
 export default async function handler(req, res, { supabaseAdminClient, emailClient } = {}) {
   res.setHeader("Access-Control-Allow-Credentials", true);
@@ -28,17 +29,8 @@ export default async function handler(req, res, { supabaseAdminClient, emailClie
     });
   }
 
-  const supabaseUrl =
-    process.env.VITE_SUPABASE_URL ||
-    process.env.SUPABASE_URL ||
-    "https://hwonxgtqessyuakdgyfw.supabase.co";
-
-  const serviceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE ||
-    process.env.SERVICE_ROLE;
+  const supabaseUrl = getSupabaseUrl();
+  const serviceRoleKey = getServiceRoleKey();
 
   if (!supabaseAdminClient) {
     if (!supabaseUrl || !serviceRoleKey) {
