@@ -58,6 +58,8 @@ export function getSupabaseUrl() {
 
 export function getResendApiKey() {
   if (process.env.RESEND_API_KEY) return process.env.RESEND_API_KEY;
+  if (process.env.RESEND_API_KEY === "") return "";
+  if (process.env.npm_lifecycle_event === "test") return "";
 
   const candidateFiles = [".env.local", ".env"];
   for (const file of candidateFiles) {
