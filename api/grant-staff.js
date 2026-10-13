@@ -1,9 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
-export default async function handler(req, res) {
+export default async function handler(req, res, { supabaseAdminClient } = {}) {
   res.setHeader("Access-Control-Allow-Credentials", true);
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,POST");
   res.setHeader(
     "Access-Control-Allow-Headers",
     "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization"
@@ -13,11 +13,10 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Health check endpoint
+  // Health check endpoint (does not perform any mutations)
   if (req.method === "GET") {
     const hasKey = Boolean(
       process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
       process.env.SERVICE_ROLE_KEY ||
       process.env.SUPABASE_SERVICE_KEY ||
       process.env.SUPABASE_SERVICE_ROLE
@@ -32,6 +31,16 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
+  // 1. Enforce valid Supabase Bearer token
+  const authHeader = req.headers.authorization || req.headers.Authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+
+  if (!token) {
+    return res.status(401).json({
+      error: "Authentication required: Missing Bearer token in Authorization header."
+    });
+  }
+
   const supabaseUrl =
     process.env.VITE_SUPABASE_URL ||
     process.env.SUPABASE_URL ||
@@ -39,51 +48,45 @@ export default async function handler(req, res) {
 
   const serviceRoleKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SERVICE_ROLE_KEY ||
     process.env.SUPABASE_SERVICE_KEY ||
     process.env.SUPABASE_SERVICE_ROLE ||
     process.env.SERVICE_ROLE;
 
-  if (!serviceRoleKey) {
+  if (!supabaseUrl) {
     return res.status(500).json({
-      error: "SUPABASE_SERVICE_ROLE_KEY is missing in Vercel environment variables. Please ensure it is added under Vercel Project Settings > Environment Variables for 'Production' and that you have redeployed."
+      error: "Server configuration error: SUPABASE_URL is not configured."
     });
   }
 
-  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false }
-  });
-
-  const body = req.body || {};
-  const cleanEmail = (body.email || "").toLowerCase().trim();
-  const cleanName = (body.displayName || body.display_name || "").trim();
-  const role = body.role || "teacher";
-  const department = body.department || "IICT Faculty";
-  const callerReportedEmail = (body.callerEmail || "").toLowerCase().trim();
-
-  // Verify caller identity via JWT or body
-  const authHeader = req.headers.authorization || req.headers.Authorization || "";
-  const token = authHeader.replace(/^Bearer\s+/i, "");
-
-  let callerEmail = callerReportedEmail;
-  let callerId = "";
-
-  if (token) {
-    try {
-      const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
-      if (!userError && userData?.user) {
-        callerEmail = (userData.user.email || "").toLowerCase().trim();
-        callerId = userData.user.id;
-      }
-    } catch (e) {
-      console.warn("Token verification warning:", e.message);
-    }
+  if (!serviceRoleKey) {
+    return res.status(500).json({
+      error: "Server configuration error: SUPABASE_SERVICE_ROLE_KEY is not configured."
+    });
   }
 
-  // Authorize Super Admin: dp844771@gmail.com is hardcoded authorized
-  const isSuperAdminEmail = callerEmail === "dp844771@gmail.com";
-  let isSuperAdmin = isSuperAdminEmail;
+  const supabaseAdmin =
+    supabaseAdminClient ||
+    createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
+
+  let callerId = "";
+  let callerEmail = "";
+
+  try {
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    if (userError || !userData?.user) {
+      return res.status(401).json({ error: "Invalid or expired authorization token." });
+    }
+    callerId = userData.user.id;
+    callerEmail = (userData.user.email || "").toLowerCase().trim();
+  } catch (e) {
+    return res.status(401).json({ error: "Token verification failed." });
+  }
+
+  // 2. Authorize ONLY verified Super Admin from database or trusted email
+  let isSuperAdmin = callerEmail === "dp844771@gmail.com";
 
   if (!isSuperAdmin && callerId) {
     try {
@@ -92,25 +95,42 @@ export default async function handler(req, res) {
         .select("role")
         .eq("user_id", callerId)
         .maybeSingle();
+
       if (profile?.role === "super_admin") {
         isSuperAdmin = true;
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Error checking caller staff profile:", e.message);
+    }
   }
 
   if (!isSuperAdmin) {
     return res.status(403).json({
-      error: `Permission denied. Signed in as '${callerEmail || "unknown"}'. Only Super Admin (dp844771@gmail.com) can grant staff access.`
+      error: "Permission denied: Only Super Admin can grant or manage staff access."
     });
   }
 
-  if (!cleanEmail || !cleanName) {
-    return res.status(400).json({ error: "Email and display name are required." });
+  // 3. Validate request payload (ignoring any callerEmail passed in body)
+  const body = req.body || {};
+  const cleanEmail = (body.email || "").toLowerCase().trim();
+  const cleanName = (body.displayName || body.display_name || "").trim();
+  const rawRole = (body.role || "teacher").toLowerCase().trim();
+  const department = (body.department || "IICT Faculty").trim();
+
+  const allowedRoles = ["super_admin", "teacher", "counsellor", "manager", "admin"];
+  const role = allowedRoles.includes(rawRole) ? rawRole : "teacher";
+
+  if (!cleanEmail || !cleanEmail.includes("@") || cleanEmail.length < 5) {
+    return res.status(400).json({ error: "A valid email address is required." });
+  }
+
+  if (!cleanName || cleanName.length < 2) {
+    return res.status(400).json({ error: "A valid display name (at least 2 characters) is required." });
   }
 
   try {
-    // 1. Ensure Super Admin itself exists in staff_profiles
-    if (callerId && isSuperAdminEmail) {
+    // 4. Ensure Super Admin profile itself exists in staff_profiles
+    if (callerId && callerEmail === "dp844771@gmail.com") {
       await supabaseAdmin.from("staff_profiles").upsert(
         {
           user_id: callerId,
@@ -123,7 +143,7 @@ export default async function handler(req, res) {
       );
     }
 
-    // 2. Fetch users to find the staff member's registered user_id
+    // 5. Look up target user in Supabase Auth
     const { data: userList, error: listError } = await supabaseAdmin.auth.admin.listUsers({
       page: 1,
       perPage: 1000
@@ -144,14 +164,15 @@ export default async function handler(req, res) {
     }
 
     if (targetUser) {
-      // User is registered in Supabase Auth! Activate them in staff_profiles
+      // User is registered in Supabase Auth: activate them in staff_profiles
       const { error: upsertErr } = await supabaseAdmin.from("staff_profiles").upsert(
         {
           user_id: targetUser.id,
           email: cleanEmail,
           display_name: cleanName,
           role: role,
-          department: department
+          department: department,
+          created_by: callerId
         },
         { onConflict: "user_id" }
       );
@@ -161,7 +182,7 @@ export default async function handler(req, res) {
         throw upsertErr;
       }
 
-      // Clean up from pending invites if present
+      // Remove from pending_staff_invites if present
       try {
         await supabaseAdmin.from("pending_staff_invites").delete().eq("email", cleanEmail);
       } catch {}
@@ -169,7 +190,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         success: true,
         status: "granted",
-        message: `Success! ${cleanName} (${cleanEmail}) has been activated as ${role}. They can now view inquiries on the dashboard.`,
+        message: `Success! ${cleanName} (${cleanEmail}) has been activated as ${role}.`,
         user: {
           id: targetUser.id,
           email: cleanEmail,
@@ -178,26 +199,27 @@ export default async function handler(req, res) {
         }
       });
     } else {
-      // Staff member has not registered in Supabase Auth yet.
-      // Record a pre-authorized invite in pending_staff_invites table
-      try {
-        await supabaseAdmin.from("pending_staff_invites").upsert(
-          {
-            email: cleanEmail,
-            display_name: cleanName,
-            role: role,
-            department: department
-          },
-          { onConflict: "email" }
-        );
-      } catch (invErr) {
-        console.warn("pending_staff_invites warning:", invErr.message);
+      // User has not registered in Supabase Auth yet: record pre-authorized invite
+      const { error: inviteErr } = await supabaseAdmin.from("pending_staff_invites").upsert(
+        {
+          email: cleanEmail,
+          display_name: cleanName,
+          role: role,
+          department: department,
+          created_by: callerId
+        },
+        { onConflict: "email" }
+      );
+
+      if (inviteErr) {
+        console.error("pending_staff_invites upsert error:", inviteErr);
+        throw inviteErr;
       }
 
       return res.status(200).json({
         success: true,
         status: "invited",
-        message: `Pre-authorization recorded! ${cleanName} (${cleanEmail}) is authorized. When they register/log in with this email on the website, their staff role will activate automatically.`,
+        message: `Pre-authorization recorded! ${cleanName} (${cleanEmail}) has been pre-authorized. When they register with this email, staff access will activate automatically.`,
         email: cleanEmail
       });
     }

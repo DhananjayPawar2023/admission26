@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-export default async function handler(req, res) {
+export default async function handler(req, res, { supabaseAdminClient } = {}) {
   res.setHeader("Access-Control-Allow-Credentials", true);
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,POST");
@@ -13,6 +13,13 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
+  const authHeader = req.headers.authorization || req.headers.Authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+
+  if (!token) {
+    return res.status(401).json({ error: "Missing authorization Bearer token." });
+  }
+
   const supabaseUrl =
     process.env.VITE_SUPABASE_URL ||
     process.env.SUPABASE_URL ||
@@ -20,31 +27,31 @@ export default async function handler(req, res) {
 
   const serviceRoleKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SERVICE_ROLE_KEY ||
     process.env.SUPABASE_SERVICE_KEY;
 
-  if (!serviceRoleKey) {
+  if (!supabaseUrl) {
     return res.status(500).json({
-      error: "SUPABASE_SERVICE_ROLE_KEY is not configured on the server."
+      error: "Server configuration error: SUPABASE_URL is not configured."
     });
   }
 
-  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false }
-  });
-
-  const authHeader = req.headers.authorization || req.headers.Authorization || "";
-  const token = authHeader.replace(/^Bearer\s+/i, "");
-
-  if (!token) {
-    return res.status(401).json({ error: "Missing authorization token." });
+  if (!serviceRoleKey) {
+    return res.status(500).json({
+      error: "Server configuration error: SUPABASE_SERVICE_ROLE_KEY is not configured."
+    });
   }
+
+  const supabaseAdmin =
+    supabaseAdminClient ||
+    createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
 
   try {
     const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
     if (userError || !userData?.user) {
-      return res.status(401).json({ error: "Invalid user session." });
+      return res.status(401).json({ error: "Invalid or expired user session." });
     }
 
     const user = userData.user;
@@ -65,7 +72,7 @@ export default async function handler(req, res) {
       );
     }
 
-    // B. Check if there was a pending invite for this email
+    // B. Check if there was an explicit pending invite for this email
     try {
       const { data: invite } = await supabaseAdmin
         .from("pending_staff_invites")
@@ -88,46 +95,40 @@ export default async function handler(req, res) {
 
         await supabaseAdmin.from("pending_staff_invites").delete().eq("email", userEmail);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Notice checking pending invites:", e.message);
+    }
 
-    // C. Retrieve or auto-create the active profile
-    let { data: currentProfile } = await supabaseAdmin
+    // C. Retrieve the active profile for this authenticated user
+    const { data: currentProfile } = await supabaseAdmin
       .from("staff_profiles")
       .select("*")
       .or(`user_id.eq.${userId},email.eq.${userEmail}`)
       .maybeSingle();
 
-    if (!currentProfile && userEmail) {
-      const assignedRole = userEmail === "dp844771@gmail.com" ? "super_admin" : "teacher";
-      const assignedName = user.user_metadata?.display_name || userEmail.split("@")[0];
-      const assignedDept = userEmail === "dp844771@gmail.com" ? "Admissions Directorate" : "IICT Faculty";
-
-      const { data: newProfile } = await supabaseAdmin
-        .from("staff_profiles")
-        .upsert(
-          {
-            user_id: userId,
-            email: userEmail,
-            display_name: assignedName,
-            role: assignedRole,
-            department: assignedDept
-          },
-          { onConflict: "user_id" }
-        )
-        .select()
-        .maybeSingle();
-
-      currentProfile = newProfile || {
-        user_id: userId,
-        email: userEmail,
-        display_name: assignedName,
-        role: assignedRole,
-        department: assignedDept
-      };
+    // D. If not registered in staff_profiles and not super admin, do NOT auto-create a staff profile!
+    if (!currentProfile) {
+      return res.status(200).json({
+        success: true,
+        isStaff: false,
+        profile: null,
+        staffList: [],
+        message: "User is authenticated but does not possess an authorized staff role."
+      });
     }
 
+    // If user_id is mismatched (e.g. invited by email before signing up), sync user_id
+    if (currentProfile.user_id !== userId) {
+      await supabaseAdmin
+        .from("staff_profiles")
+        .update({ user_id: userId })
+        .eq("email", userEmail);
+      currentProfile.user_id = userId;
+    }
+
+    // E. Fetch full staff list only if caller is Super Admin
     let staffList = [];
-    if (currentProfile?.role === "super_admin" || userEmail === "dp844771@gmail.com") {
+    if (currentProfile.role === "super_admin" || userEmail === "dp844771@gmail.com") {
       const { data: allStaff } = await supabaseAdmin
         .from("staff_profiles")
         .select("*")
@@ -137,10 +138,12 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      profile: currentProfile || (userEmail === "dp844771@gmail.com" ? { role: "super_admin", display_name: "Dhananjay Pawar (Super Admin)", email: userEmail } : null),
+      isStaff: true,
+      profile: currentProfile,
       staffList
     });
   } catch (err) {
+    console.error("sync-staff handler error:", err);
     return res.status(500).json({ error: err.message || "Failed to sync staff session." });
   }
 }
