@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import {
+  AlertCircle,
+  AlertTriangle,
   Award,
+  Check,
   CheckCircle2,
   Clock,
   Download,
@@ -10,10 +13,14 @@ import {
   GraduationCap,
   LockKeyhole,
   Mail,
+  MailCheck,
   MessageCircle,
+  MessageSquare,
   Phone,
+  RotateCw,
   Save,
   Search,
+  Send,
   ShieldAlert,
   ShieldCheck,
   TrendingUp,
@@ -42,8 +49,13 @@ export function Dashboard({ session, onExit }) {
   const [selectedAppModal, setSelectedAppModal] = useState(null);
   const [updatingAppId, setUpdatingAppId] = useState(null);
   const [appNotesDraft, setAppNotesDraft] = useState({});
+  const [appEmailFeedback, setAppEmailFeedback] = useState({});
+  const [retryingEmailAppId, setRetryingEmailAppId] = useState(null);
 
   const [leads, setLeads] = useState([]);
+  const [inquiryRepliesDraft, setInquiryRepliesDraft] = useState({});
+  const [sendingReplyId, setSendingReplyId] = useState(null);
+  const [inquiryEmailFeedback, setInquiryEmailFeedback] = useState({});
   const [staffList, setStaffList] = useState([]);
   const [userRole, setUserRole] = useState(null); // "super_admin" | "teacher" | null
   const [isAuthorized, setIsAuthorized] = useState(null); // null = checking, true = authorized, false = not staff
@@ -233,11 +245,73 @@ export function Dashboard({ session, onExit }) {
     }
   };
 
-  const updateApplicationStatus = async (appRecord, nextStatus, notes) => {
+  const updateApplicationStatus = async (appRecord, nextStatus, notes, forceRetryEmail = false) => {
     const key = appRecord.id || appRecord.application_number;
     setUpdatingAppId(key);
+    if (forceRetryEmail) setRetryingEmailAppId(key);
+
     const updatedNotes = notes !== undefined ? notes : (appNotesDraft[key] || appRecord.scrutiny_notes || "");
 
+    // 1. If server session is active, invoke server API to verify permissions,
+    // persist status change and dispatch email notification
+    if (session?.access_token) {
+      try {
+        const response = await fetch("/api/update-application-status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({
+            applicationId: appRecord.id,
+            applicationNumber: appRecord.application_number,
+            nextStatus,
+            scrutinyNotes: updatedNotes,
+            forceRetryEmail
+          })
+        });
+
+        const resData = await response.json();
+        if (response.ok && resData?.success) {
+          if (resData.emailDelivery) {
+            setAppEmailFeedback((prev) => ({
+              ...prev,
+              [key]: resData.emailDelivery
+            }));
+          }
+
+          const freshApp = resData.application || {
+            ...appRecord,
+            status: nextStatus,
+            scrutiny_notes: updatedNotes,
+            last_notification_status: resData.emailDelivery?.status,
+            last_notification_error: resData.emailDelivery?.error
+          };
+
+          setApplications((prev) =>
+            prev.map((a) =>
+              (a.id === appRecord.id || a.application_number === appRecord.application_number)
+                ? { ...a, ...freshApp }
+                : a
+            )
+          );
+
+          if (selectedAppModal && selectedAppModal.application_number === appRecord.application_number) {
+            setSelectedAppModal((prev) => ({ ...prev, ...freshApp }));
+          }
+
+          setUpdatingAppId(null);
+          setRetryingEmailAppId(null);
+          return;
+        } else if (resData?.error) {
+          setError(resData.error);
+        }
+      } catch (apiErr) {
+        console.warn("Server API update notice, falling back to direct DB update:", apiErr);
+      }
+    }
+
+    // Direct DB fallback if server endpoint is offline
     if (supabase && appRecord.id) {
       try {
         const { error: updateErr } = await supabase
@@ -250,7 +324,7 @@ export function Dashboard({ session, onExit }) {
           .eq("id", appRecord.id);
         if (updateErr) setError(updateErr.message);
       } catch (err) {
-        console.warn("Application status update error:", err);
+        console.warn("Application status direct update error:", err);
       }
     }
 
@@ -277,6 +351,184 @@ export function Dashboard({ session, onExit }) {
     } catch {}
 
     setUpdatingAppId(null);
+    setRetryingEmailAppId(null);
+  };
+
+  const sendInquiryReply = async (inquiryId, retryLast = false) => {
+    const replyText = inquiryRepliesDraft[inquiryId] || "";
+    if (!retryLast && (!replyText || replyText.trim().length < 2)) {
+      setError("Please type a reply message before sending.");
+      return;
+    }
+
+    setSendingReplyId(inquiryId);
+    setError("");
+
+    try {
+      const response = await fetch("/api/reply-inquiry", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          inquiryId,
+          replyMessage: replyText.trim(),
+          retryLastReply: retryLast
+        })
+      });
+
+      const resData = await response.json();
+      if (response.ok && resData?.success) {
+        if (resData.emailDelivery) {
+          setInquiryEmailFeedback((prev) => ({
+            ...prev,
+            [inquiryId]: resData.emailDelivery
+          }));
+        }
+
+        const freshInquiry = resData.inquiry;
+        if (freshInquiry) {
+          setLeads((prev) =>
+            prev.map((l) => (l.id === inquiryId ? { ...l, ...freshInquiry } : l))
+          );
+        }
+
+        if (!retryLast) {
+          setInquiryRepliesDraft((prev) => ({ ...prev, [inquiryId]: "" }));
+        }
+      } else {
+        setError(resData?.error || "Failed to send inquiry reply.");
+      }
+    } catch (err) {
+      setError(`Network error sending reply: ${err.message}`);
+    }
+
+    setSendingReplyId(null);
+  };
+
+  const renderNotificationStatusBadge = (app) => {
+    if (!app) return null;
+    const key = app.id || app.application_number;
+    const feedback = appEmailFeedback[key];
+    const status = feedback?.status || app.last_notification_status;
+    const errorMsg = feedback?.error || app.last_notification_error;
+    const isRetrying = retryingEmailAppId === key;
+
+    if (!status) return null;
+
+    if (status === "sent" || status === "mock_sent") {
+      return (
+        <div className="notification-status-row sent" title={`Notification delivered to ${app.email}`}>
+          <MailCheck size={12} color="#15803D" />
+          <span>Email Sent</span>
+        </div>
+      );
+    }
+
+    if (status === "not_configured") {
+      return (
+        <div className="notification-status-row not_configured" title="Email service not configured. Set RESEND_API_KEY in server environment variables.">
+          <AlertCircle size={12} color="#B45309" />
+          <span>No Server Key</span>
+          <button
+            type="button"
+            className="retry-pill-btn"
+            disabled={isRetrying}
+            onClick={() => updateApplicationStatus(app, app.status, undefined, true)}
+            title="Retry sending notification email"
+          >
+            <RotateCw size={10} className={isRetrying ? "spin" : ""} /> Retry
+          </button>
+        </div>
+      );
+    }
+
+    if (status === "failed") {
+      return (
+        <div className="notification-status-row failed" title={errorMsg || "Delivery failed"}>
+          <AlertTriangle size={12} color="#DC2626" />
+          <span>Email Failed</span>
+          <button
+            type="button"
+            className="retry-pill-btn"
+            disabled={isRetrying}
+            onClick={() => updateApplicationStatus(app, app.status, undefined, true)}
+            title={`Retry sending notification email: ${errorMsg || "Failed"}`}
+          >
+            <RotateCw size={10} className={isRetrying ? "spin" : ""} /> Retry
+          </button>
+        </div>
+      );
+    }
+
+    if (status === "skipped_duplicate") {
+      return (
+        <div className="notification-status-row skipped" title="Status unchanged. Duplicate email prevented.">
+          <Check size={12} color="#64748B" />
+          <span>Already Notified</span>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderInquiryReplyStatus = (lead) => {
+    if (!lead) return null;
+    const feedback = inquiryEmailFeedback[lead.id];
+    const status = feedback?.status || lead.last_reply_email_status;
+    const errorMsg = feedback?.error || lead.last_reply_email_error;
+    const isSending = sendingReplyId === lead.id;
+
+    if (!status && !lead.last_reply_sent_at) return null;
+
+    if (status === "sent" || status === "mock_sent") {
+      return (
+        <div className="notification-status-row sent">
+          <MailCheck size={12} color="#15803D" />
+          <span>Reply delivered to {lead.email}</span>
+        </div>
+      );
+    }
+
+    if (status === "not_configured") {
+      return (
+        <div className="notification-status-row not_configured" title="Email service not configured. Set RESEND_API_KEY in server environment variables.">
+          <AlertCircle size={12} color="#B45309" />
+          <span>Saved to chat &middot; Server key missing</span>
+          <button
+            type="button"
+            className="retry-pill-btn"
+            disabled={isSending}
+            onClick={() => sendInquiryReply(lead.id, true)}
+            title="Retry sending notification email without duplicating message"
+          >
+            <RotateCw size={10} className={isSending ? "spin" : ""} /> Retry Email
+          </button>
+        </div>
+      );
+    }
+
+    if (status === "failed") {
+      return (
+        <div className="notification-status-row failed" title={errorMsg || "Delivery failed"}>
+          <AlertTriangle size={12} color="#DC2626" />
+          <span>Delivery failed: {errorMsg ? errorMsg.slice(0, 35) + "..." : "Error"}</span>
+          <button
+            type="button"
+            className="retry-pill-btn"
+            disabled={isSending}
+            onClick={() => sendInquiryReply(lead.id, true)}
+            title="Retry sending email without duplicating message"
+          >
+            <RotateCw size={10} className={isSending ? "spin" : ""} /> Retry Email
+          </button>
+        </div>
+      );
+    }
+
+    return null;
   };
 
   const updateLeadAssignment = async (leadId, teacherUserId) => {
@@ -962,19 +1214,23 @@ export function Dashboard({ session, onExit }) {
                           </td>
 
                           <td>
-                            <select
-                              value={currentStatus}
-                              disabled={isUpdating}
-                              onChange={(e) => updateApplicationStatus(app, e.target.value)}
-                              className={`status-select-badge ${currentStatus}`}
-                              style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11.5px", fontWeight: 600 }}
-                            >
-                              <option value="submitted">New / Submitted</option>
-                              <option value="under_scrutiny">Under Committee Scrutiny</option>
-                              <option value="documents_verified">Documents Verified</option>
-                              <option value="merit_listed">Merit Listed</option>
-                              <option value="provisionally_approved">Provisionally Approved</option>
-                            </select>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                              <select
+                                value={currentStatus}
+                                disabled={isUpdating}
+                                onChange={(e) => updateApplicationStatus(app, e.target.value)}
+                                className={`status-select-badge ${currentStatus}`}
+                                style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11.5px", fontWeight: 600 }}
+                              >
+                                <option value="submitted">New / Submitted</option>
+                                <option value="under_scrutiny">Under Committee Scrutiny</option>
+                                <option value="documents_verified">Documents Verified</option>
+                                <option value="merit_listed">Merit Listed</option>
+                                <option value="provisionally_approved">Provisionally Approved</option>
+                              </select>
+
+                              {renderNotificationStatusBadge(app)}
+                            </div>
                           </td>
 
                           <td>
@@ -1262,6 +1518,44 @@ export function Dashboard({ session, onExit }) {
                     {lead.question && (
                       <CounsellingTranscriptViewer transcript={lead.question} />
                     )}
+
+                    {/* Official Counsellor Reply Area */}
+                    <div className="inquiry-reply-area">
+                      <div className="inquiry-reply-header">
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, fontSize: "12.5px", color: "var(--navy)" }}>
+                          <MessageSquare size={14} color="#C05A21" />
+                          <span>Official Counsellor Reply to Student</span>
+                        </div>
+                        <span style={{ fontSize: "11px", color: "#64748B" }}>
+                          Will email {lead.email} &amp; append to conversation transcript
+                        </span>
+                      </div>
+
+                      <textarea
+                        className="inquiry-reply-input"
+                        placeholder={`Write official reply to ${lead.student_name} regarding ${lead.program_interest || "admissions guidance"}...`}
+                        value={inquiryRepliesDraft[lead.id] || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setInquiryRepliesDraft((prev) => ({ ...prev, [lead.id]: val }));
+                        }}
+                      />
+
+                      <div className="inquiry-reply-actions-row">
+                        <button
+                          type="button"
+                          className="primary-button send-reply-btn"
+                          disabled={sendingReplyId === lead.id || !(inquiryRepliesDraft[lead.id] || "").trim()}
+                          onClick={() => sendInquiryReply(lead.id, false)}
+                        >
+                          <Send size={13} />
+                          <span>{sendingReplyId === lead.id ? "Sending & Notifying..." : "Send Reply & Notify Student"}</span>
+                        </button>
+
+                        {/* Delivery Status and Retry */}
+                        {renderInquiryReplyStatus(lead)}
+                      </div>
+                    </div>
 
                     {/* Inline Counsellor Notes */}
                     <div className="lead-notes-area">
@@ -1620,10 +1914,11 @@ export function Dashboard({ session, onExit }) {
                     {selectedAppModal.application_number}
                   </strong>
                 </div>
-                <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                   <span className={`status-select-badge ${selectedAppModal.status || "submitted"}`} style={{ padding: "5px 12px", borderRadius: "6px" }}>
                     Status: {selectedAppModal.status || "submitted"}
                   </span>
+                  {renderNotificationStatusBadge(selectedAppModal)}
                 </div>
               </div>
 
