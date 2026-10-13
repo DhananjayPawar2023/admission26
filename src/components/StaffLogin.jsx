@@ -108,6 +108,16 @@ export function StaffLogin({ onSuccess, onBack }) {
             </p>
           </div>
 
+          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", padding: "10px 14px", marginBottom: "16px", fontSize: "12px", color: "#166534", display: "flex", alignItems: "flex-start", gap: "10px" }}>
+            <CheckCircle2 size={16} color="#15803D" style={{ flexShrink: 0, marginTop: "2px" }} />
+            <div>
+              <strong style={{ display: "block", color: "#14532d", marginBottom: "2px" }}>Direct Staff Access Active</strong>
+              <span>
+                Faculty &amp; staff authorized by administration can sign in directly with their email and assigned password (default: <code>MGMU@2026</code>).
+              </span>
+            </div>
+          </div>
+
           {/* Navigation Tabs */}
           <div className="staff-tabs-list" role="tablist" aria-label="Staff Authentication Mode">
             <button

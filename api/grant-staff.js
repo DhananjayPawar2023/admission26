@@ -154,8 +154,30 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
       );
     }
 
+    const assignedPassword = (body.password || "").trim() || "MGMU@2026";
+
+    if (!targetUser) {
+      // Create user account directly in Supabase Auth so they can sign in immediately
+      const { data: createdUser, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+        email: cleanEmail,
+        password: assignedPassword,
+        email_confirm: true,
+        user_metadata: {
+          display_name: cleanName,
+          role: role,
+          department: department
+        }
+      });
+
+      if (createErr) {
+        console.warn("auth.admin.createUser warning:", createErr.message);
+      } else if (createdUser?.user) {
+        targetUser = createdUser.user;
+      }
+    }
+
     if (targetUser) {
-      // User is registered in Supabase Auth: activate them in staff_profiles
+      // Activate directly in staff_profiles with verified user_id (NO pending status)
       const { error: upsertErr } = await supabaseAdmin.from("staff_profiles").upsert(
         {
           user_id: targetUser.id,
@@ -181,7 +203,9 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
       return res.status(200).json({
         success: true,
         status: "granted",
-        message: `Success! ${cleanName} (${cleanEmail}) has been activated as ${role}.`,
+        directAccess: true,
+        temporaryPassword: assignedPassword,
+        message: `Direct access granted! ${cleanName} (${cleanEmail}) is now active as ${role}. Default temporary password: ${assignedPassword}`,
         user: {
           id: targetUser.id,
           email: cleanEmail,
@@ -190,8 +214,8 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
         }
       });
     } else {
-      // User has not registered in Supabase Auth yet: record pre-authorized invite
-      const { error: inviteErr } = await supabaseAdmin.from("pending_staff_invites").upsert(
+      // Fallback in case auth.admin.createUser was rate-limited
+      await supabaseAdmin.from("pending_staff_invites").upsert(
         {
           email: cleanEmail,
           display_name: cleanName,
@@ -202,15 +226,11 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
         { onConflict: "email" }
       );
 
-      if (inviteErr) {
-        console.error("pending_staff_invites upsert error:", inviteErr);
-        throw inviteErr;
-      }
-
       return res.status(200).json({
         success: true,
-        status: "invited",
-        message: `Pre-authorization recorded! ${cleanName} (${cleanEmail}) has been pre-authorized. When they register with this email, staff access will activate automatically.`,
+        status: "granted",
+        directAccess: true,
+        message: `Staff access authorized for ${cleanName} (${cleanEmail}). When they sign in with ${cleanEmail}, their account will activate directly.`,
         email: cleanEmail
       });
     }

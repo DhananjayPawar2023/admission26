@@ -64,6 +64,10 @@ export function Dashboard({ session, onExit }) {
   const [newTeacherName, setNewTeacherName] = useState("");
   const [newTeacherRole, setNewTeacherRole] = useState("teacher");
   const [newTeacherDept, setNewTeacherDept] = useState("IICT Faculty");
+  const [newTeacherPassword, setNewTeacherPassword] = useState("MGMU@2026");
+  const [currentStaffName, setCurrentStaffName] = useState("");
+  const [currentStaffDept, setCurrentStaffDept] = useState("");
+  const [showStaffWelcome, setShowStaffWelcome] = useState(true);
   const [granting, setGranting] = useState(false);
   const [grantMsg, setGrantMsg] = useState("");
   const [revokingEmail, setRevokingEmail] = useState(null);
@@ -136,6 +140,8 @@ export function Dashboard({ session, onExit }) {
             const apiData = await apiRes.json();
             if (apiData.isStaff && apiData.profile?.role) {
               activeRole = apiData.profile.role;
+              if (apiData.profile.display_name) setCurrentStaffName(apiData.profile.display_name);
+              if (apiData.profile.department) setCurrentStaffDept(apiData.profile.department);
             }
             if (apiData.staffList && apiData.staffList.length > 0) {
               setStaffList(apiData.staffList);
@@ -151,12 +157,14 @@ export function Dashboard({ session, onExit }) {
         try {
           const { data: dbProfile } = await supabase
             .from("staff_profiles")
-            .select("role")
+            .select("role, display_name, department")
             .eq("user_id", session.user.id)
             .maybeSingle();
 
           if (dbProfile?.role) {
             activeRole = dbProfile.role;
+            if (dbProfile.display_name) setCurrentStaffName(dbProfile.display_name);
+            if (dbProfile.department) setCurrentStaffDept(dbProfile.department);
           }
         } catch {}
       }
@@ -213,17 +221,16 @@ export function Dashboard({ session, onExit }) {
           setAppNotesDraft(initialDrafts);
         });
 
-      // 6. Load staff profiles list and pending invites
+      // 6. Load staff profiles list (all active, no pending status)
       Promise.all([
         supabase.from("staff_profiles").select("*").order("created_at", { ascending: false }),
         supabase.from("pending_staff_invites").select("*").order("created_at", { ascending: false })
       ]).then(([profilesRes, invitesRes]) => {
         if (!isMounted) return;
         const activeProfiles = profilesRes.data || [];
-        const pendingInvites = (invitesRes.data || []).map((inv) => ({
-          ...inv,
-          isPending: true
-        }));
+        const pendingInvites = (invitesRes.data || []).filter(
+          (inv) => !activeProfiles.some((p) => (p.email || "").toLowerCase() === (inv.email || "").toLowerCase())
+        );
         setStaffList([...activeProfiles, ...pendingInvites]);
       });
     };
@@ -626,7 +633,8 @@ export function Dashboard({ session, onExit }) {
           email: cleanEmail,
           displayName: cleanName,
           role: newTeacherRole,
-          department: newTeacherDept
+          department: newTeacherDept,
+          password: newTeacherPassword || "MGMU@2026"
         })
       });
 
@@ -644,7 +652,9 @@ export function Dashboard({ session, onExit }) {
         if (refreshed) setStaffList(refreshed);
         setNewTeacherEmail("");
         setNewTeacherName("");
+        setNewTeacherPassword("MGMU@2026");
         setGranting(false);
+        checkApiHealth();
         return;
       }
 
@@ -956,6 +966,55 @@ export function Dashboard({ session, onExit }) {
           Sign out
         </button>
       </div>
+
+      {/* Welcome Card for Authorized Faculty Members */}
+      {userRole !== "super_admin" && showStaffWelcome && (
+        <div
+          className="staff-welcome-banner"
+          style={{
+            background: "linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)",
+            border: "1px solid #a7f3d0",
+            borderRadius: "8px",
+            padding: "16px 20px",
+            marginBottom: "20px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.04)"
+          }}
+        >
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <CheckCircle2 size={18} color="#059669" />
+              <strong style={{ color: "#065f46", fontSize: "14.5px" }}>
+                Welcome to IICT Admissions Portal, {currentStaffName || userEmail}!
+              </strong>
+              <span className="teacher-badge" style={{ textTransform: "capitalize" }}>
+                {userRole === "teacher" ? "Faculty" : userRole === "counsellor" ? "Admissions Counsellor" : userRole}
+              </span>
+            </div>
+            <p style={{ margin: "5px 0 0 26px", fontSize: "12.5px", color: "#374151", lineHeight: "1.5" }}>
+              Your direct staff access is active for <strong>{currentStaffDept || "IICT Faculty"}</strong>. You have full authorization to review direct applications, track inquiry status, update scrutiny notes, and communicate with prospective applicants.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowStaffWelcome(false)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#6b7280",
+              fontSize: "20px",
+              cursor: "pointer",
+              padding: "4px 8px",
+              lineHeight: 1
+            }}
+            title="Dismiss welcome message"
+          >
+            &times;
+          </button>
+        </div>
+      )}
 
       {/* Navigation Tabs */}
       <div className="dashboard-nav-tabs" role="tablist" aria-label="Dashboard sections">
@@ -1792,6 +1851,21 @@ export function Dashboard({ session, onExit }) {
                 </label>
               </div>
 
+              <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
+                Initial Login Password
+                <input
+                  type="text"
+                  value={newTeacherPassword}
+                  onChange={(e) => setNewTeacherPassword(e.target.value)}
+                  placeholder="MGMU@2026"
+                  required
+                  style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
+                />
+                <span style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px", display: "block" }}>
+                  Staff can sign in immediately at <code>/staff</code> with this password. Directly active &middot; No pending status.
+                </span>
+              </label>
+
               <button
                 type="submit"
                 className="primary-button"
@@ -1802,7 +1876,7 @@ export function Dashboard({ session, onExit }) {
                 {granting ? "Granting..." : "Grant Staff Access"}
               </button>
               {grantMsg && (
-                <div style={{ padding: "8px 12px", borderRadius: "6px", background: grantMsg.includes("granted") || grantMsg.includes("recorded") ? "#ecfdf5" : "#fff7ed", border: "1px solid " + (grantMsg.includes("granted") || grantMsg.includes("recorded") ? "#a7f3d0" : "#fed7aa"), color: grantMsg.includes("granted") || grantMsg.includes("recorded") ? "#065f46" : "#9a3412", fontSize: "12px", fontWeight: 600 }}>
+                <div style={{ padding: "8px 12px", borderRadius: "6px", background: grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#ecfdf5" : "#fff7ed", border: "1px solid " + (grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#a7f3d0" : "#fed7aa"), color: grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#065f46" : "#9a3412", fontSize: "12px", fontWeight: 600 }}>
                   {grantMsg}
                 </div>
               )}
@@ -1822,8 +1896,8 @@ export function Dashboard({ session, onExit }) {
                     <small>{staff.email || "Faculty member"} · {staff.department || "IICT"}</small>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span className={staff.isPending ? "pending-invite-badge" : staff.role === "super_admin" ? "super-admin-badge" : "teacher-badge"}>
-                      {staff.isPending ? "Pending Invite" : staff.role}
+                    <span className={staff.role === "super_admin" ? "super-admin-badge" : "teacher-badge"}>
+                      {staff.role}
                     </span>
                     {staff.role !== "super_admin" && staff.email !== "dp844771@gmail.com" && (
                       <button

@@ -126,6 +126,39 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
     // E. Fetch full staff list only if caller is Super Admin
     let staffList = [];
     if (currentProfile.role === "super_admin" || userEmail === "dp844771@gmail.com") {
+      // Auto-promote any remaining pending invites so all staff are directly active
+      try {
+        const { data: lingeringInvites } = await supabaseAdmin.from("pending_staff_invites").select("*");
+        if (lingeringInvites && lingeringInvites.length > 0) {
+          const { data: allUsers } = await supabaseAdmin.auth.admin.listUsers();
+          for (const inv of lingeringInvites) {
+            let u = allUsers?.users?.find((x) => (x.email || "").toLowerCase() === inv.email.toLowerCase());
+            if (!u) {
+              const { data: cr } = await supabaseAdmin.auth.admin.createUser({
+                email: inv.email,
+                password: "MGMU@2026",
+                email_confirm: true,
+                user_metadata: { display_name: inv.display_name, role: inv.role, department: inv.department }
+              });
+              u = cr?.user;
+            }
+            if (u) {
+              await supabaseAdmin.from("staff_profiles").upsert({
+                user_id: u.id,
+                email: inv.email,
+                display_name: inv.display_name,
+                role: inv.role,
+                department: inv.department || "IICT Faculty",
+                created_by: inv.created_by
+              }, { onConflict: "user_id" });
+              await supabaseAdmin.from("pending_staff_invites").delete().eq("email", inv.email);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Auto-promote invites note:", e.message);
+      }
+
       const { data: allStaff } = await supabaseAdmin
         .from("staff_profiles")
         .select("*")
