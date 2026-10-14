@@ -188,6 +188,88 @@ MGM University Campus, Chhatrapati Sambhajinagar, Maharashtra
   return { subject, text, html };
 }
 
+function escapeHtml(value) {
+  return String(value ?? "—")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Builds the receipt sent immediately after a direct application is saved. */
+export function buildApplicationConfirmationEmail(application) {
+  const name = application.student_name || "Applicant";
+  const applicationNumber = application.application_number;
+  const program = application.program_choice || "Engineering Program";
+  const status = getStatusDetails("submitted");
+  const portalUrl = process.env.PUBLIC_APP_URL || "https://admission.mgmu.ac.in";
+  const subject = `MGM University IICT: Application received [${applicationNumber}]`;
+  const info = [
+    ["Application reference", applicationNumber],
+    ["Applicant name", name],
+    ["Email", application.email],
+    ["Phone", application.phone],
+    ["Program", program],
+    ["Degree level", application.degree_level],
+    ["Category", application.category],
+    ["Qualifying exam", application.qualifying_exam],
+    ["Marks", application.marks_percentage == null ? null : `${application.marks_percentage}%`],
+    ["Entrance exam", application.entrance_exam],
+    ["Entrance score", application.entrance_score],
+    ["City / State", [application.city, application.state].filter(Boolean).join(", ")]
+  ].filter(([, value]) => value != null && String(value).trim() !== "");
+
+  const text = `
+Dear ${name},
+
+MGM University IICT has received your direct application. Your application is now in progress and awaiting initial review.
+
+${info.map(([label, value]) => `${label}: ${value}`).join("\n")}
+
+Current status: ${status.label}
+
+${status.nextStep}
+
+You can track your application using your reference number and registered mobile number at:
+${portalUrl}
+
+This confirmation is not an offer of admission. No seat has been reserved and no payment has been taken.
+
+IICT Admissions, MGM University
+Admissions Helpline: +91 940 449 4299
+`.trim();
+
+  const rows = info.map(([label, value]) => `
+    <tr>
+      <td style="padding:8px 0;color:#64748B;width:42%;vertical-align:top">${escapeHtml(label)}</td>
+      <td style="padding:8px 0;color:#001E32;font-weight:600;vertical-align:top">${escapeHtml(value)}</td>
+    </tr>`).join("");
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head>
+<body style="margin:0;padding:24px;background:#F8FAFC;font-family:Arial,sans-serif;color:#001E32">
+  <main style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">
+    <header style="background:#001E32;padding:24px 28px;border-bottom:3px solid #C05A21;color:#fff">
+      <strong style="font-size:18px">MGM UNIVERSITY</strong><div style="margin-top:5px;color:#CBD5E1;font-size:13px">Institute of Information &amp; Communication Technology</div>
+    </header>
+    <section style="padding:28px">
+      <p>Dear <strong>${escapeHtml(name)}</strong>,</p>
+      <h1 style="font-size:22px;color:#001E32">Your application has been received</h1>
+      <p style="line-height:1.6;color:#334155">Your application is now <strong>in progress</strong> and awaiting initial review by the IICT Admissions Committee.</p>
+      <div style="margin:20px 0;padding:16px 18px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:14px">${rows}</table>
+      </div>
+      <p style="line-height:1.6;color:#334155">${escapeHtml(status.nextStep)}</p>
+      <p><a href="${escapeHtml(portalUrl)}" style="color:#C05A21">Track your application</a> using the reference number and registered mobile number.</p>
+      <p style="padding:12px;background:#FFF7ED;border-radius:6px;color:#7C2D12;font-size:13px">This confirmation is not an offer of admission. No seat has been reserved and no payment has been taken.</p>
+      <p style="font-size:13px;color:#64748B">IICT Admissions, MGM University<br>Admissions Helpline: +91 940 449 4299</p>
+    </section>
+  </main>
+</body></html>`;
+
+  return { subject, text, html };
+}
+
 /**
  * Builds HTML and plain text for Inquiry Counselor Replies
  * Note: Only includes the counselor's reply message and context; does NOT send full transcript.

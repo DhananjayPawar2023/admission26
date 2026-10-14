@@ -6,11 +6,14 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Copy,
   Download,
+  ExternalLink,
   Eye,
   FileText,
   Filter,
   GraduationCap,
+  LayoutGrid,
   LockKeyhole,
   Mail,
   MailCheck,
@@ -23,6 +26,7 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  Table,
   TrendingUp,
   UserCheck,
   UserPlus,
@@ -40,7 +44,7 @@ function isExplicitTestRecord(record) {
   return Boolean(record.is_demo || record.is_test || record.is_synthetic);
 }
 
-export function Dashboard({ session, onExit }) {
+export function Dashboard({ session, onExit, onOpenTracker }) {
   const [activeTab, setActiveTab] = useState("applications"); // applications, inquiries, teachers, programs
   const [applications, setApplications] = useState([]);
   const [appSearchQuery, setAppSearchQuery] = useState("");
@@ -53,6 +57,9 @@ export function Dashboard({ session, onExit }) {
   const [retryingEmailAppId, setRetryingEmailAppId] = useState(null);
 
   const [leads, setLeads] = useState([]);
+  const [inquiriesViewMode, setInquiriesViewMode] = useState("cards"); // "cards" | "table"
+  const [selectedInquiryModal, setSelectedInquiryModal] = useState(null);
+  const [copiedRef, setCopiedRef] = useState(null);
   const [inquiryRepliesDraft, setInquiryRepliesDraft] = useState({});
   const [sendingReplyId, setSendingReplyId] = useState(null);
   const [inquiryEmailFeedback, setInquiryEmailFeedback] = useState({});
@@ -750,11 +757,34 @@ export function Dashboard({ session, onExit }) {
     new Set(leads.map((l) => l.program_interest).filter(Boolean))
   );
 
+  const copyReference = (refCode) => {
+    if (!refCode) return;
+    try {
+      navigator.clipboard.writeText(refCode);
+      setCopiedRef(refCode);
+      setTimeout(() => setCopiedRef(null), 2000);
+    } catch {
+      // fallback
+    }
+  };
+
+  const handleVerifyInquiry = (lead) => {
+    if (!lead) return;
+    const ref = lead.reference_code || `IICT-2026-${(lead.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
+    if (onOpenTracker) {
+      onOpenTracker(ref, lead.phone || "", "inquiry");
+    } else {
+      setSelectedInquiryModal(lead);
+    }
+  };
+
   const filteredLeads = leads.filter((lead) => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
+      const qClean = q.replace(/[^a-z0-9]/gi, "");
+      const refClean = (lead.reference_code || "").toLowerCase().replace(/[^a-z0-9]/gi, "");
       const matchName = lead.student_name?.toLowerCase().includes(q);
-      const matchRef = lead.reference_code?.toLowerCase().includes(q);
+      const matchRef = (lead.reference_code?.toLowerCase().includes(q)) || (qClean.length >= 3 && refClean.includes(qClean));
       const matchPhone = lead.phone?.toLowerCase().includes(q);
       const matchEmail = lead.email?.toLowerCase().includes(q);
       const matchLoc = lead.location?.toLowerCase().includes(q);
@@ -1389,25 +1419,54 @@ export function Dashboard({ session, onExit }) {
                 <Search size={16} />
                 <input
                   type="text"
-                  placeholder="Search by student name, ref code, phone, email, city..."
+                  placeholder="Search by inquiry ref ID (e.g. IICT-2026-...), name, phone, email, city..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  aria-label="Filter inquiries by name or contact"
+                  aria-label="Filter inquiries by reference ID, name, or contact"
                 />
               </div>
 
-              <button
-                type="button"
-                className="export-csv-btn"
-                onClick={exportToCSV}
-                title="Download current inquiries filtered list as Excel/CSV"
-              >
-                <Download size={15} />
-                Export CSV ({filteredLeads.length})
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                {/* View Mode Toggle: Cards vs Table */}
+                <div className="inquiry-view-toggle" role="group" aria-label="Inquiry View Mode">
+                  <button
+                    type="button"
+                    className={inquiriesViewMode === "cards" ? "active" : ""}
+                    onClick={() => setInquiriesViewMode("cards")}
+                    title="Switch to Card View"
+                  >
+                    <LayoutGrid size={13} /> Cards
+                  </button>
+                  <button
+                    type="button"
+                    className={inquiriesViewMode === "table" ? "active" : ""}
+                    onClick={() => setInquiriesViewMode("table")}
+                    title="Switch to Table View (prominent Reference IDs)"
+                  >
+                    <Table size={13} /> Table
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  className="export-csv-btn"
+                  onClick={exportToCSV}
+                  title="Download current inquiries filtered list as Excel/CSV"
+                >
+                  <Download size={15} />
+                  Export CSV ({filteredLeads.length})
+                </button>
+              </div>
             </div>
 
-            <div className="admin-toolbar-row" style={{ borderTop: "1px solid #f3f4f6", paddingTop: "12px" }}>
+            <div className="inquiry-search-hint">
+              <ShieldCheck size={14} color="#C05A21" />
+              <span>
+                Official Inquiry Reference IDs (e.g. <strong>IICT-2026-XXXX</strong>) are generated for all candidate submissions. Click <strong>Verify Tracker</strong> on any record to test status tracking in real time.
+              </span>
+            </div>
+
+            <div className="admin-toolbar-row" style={{ borderTop: "1px solid #f3f4f6", paddingTop: "12px", marginTop: "10px" }}>
               <div className="admin-filters-group">
                 <span style={{ fontSize: "12px", color: "#6b7280", display: "flex", alignItems: "center", gap: "4px" }}>
                   <Filter size={13} /> Filters:
@@ -1493,225 +1552,453 @@ export function Dashboard({ session, onExit }) {
             </div>
           </div>
 
-          {/* Inquiries List */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            {filteredLeads.length > 0 ? (
-              filteredLeads.map((lead) => {
-                const assignedTeacher = staffList.find((s) => s.user_id === lead.assigned_to);
-                const isAssignedToMe = lead.assigned_to === session?.user?.id;
-                const cleanPhone = (lead.phone || "").replace(/\D/g, "");
-
-                return (
-                  <article key={lead.id} className="lead-card-expanded">
-                    <div className="lead-card-top">
-                      <div className="lead-student-meta">
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                          <strong>{lead.student_name}</strong>
-                          {isAssignedToMe && (
-                            <span style={{ fontSize: "11px", background: "#dbeafe", color: "#1e40af", fontWeight: 700, padding: "2px 8px", borderRadius: "4px" }}>
-                              Assigned to You
-                            </span>
-                          )}
-                        </div>
-                        <small>
-                          Ref: {lead.reference_code} · {lead.program_interest} · {new Date(lead.created_at).toLocaleDateString()}
-                        </small>
-                      </div>
-                      <span className={`tracker-badge ${lead.status || "new"}`}>
-                        {lead.status === "new" ? "New Lead" : lead.status}
-                      </span>
-                    </div>
-
-                    <div className="lead-profile-grid">
-                      <div className="profile-stat-box">
-                        <span>Phone / WhatsApp</span>
-                        <strong>
-                          <a href={`tel:${lead.phone}`} style={{ color: "inherit", textDecoration: "none" }}>
-                            {lead.phone}
-                          </a>
-                        </strong>
-                      </div>
-                      <div className="profile-stat-box">
-                        <span>Email</span>
-                        <strong>
-                          <a href={`mailto:${lead.email}`} style={{ color: "inherit", textDecoration: "none" }}>
-                            {lead.email}
-                          </a>
-                        </strong>
-                      </div>
-                      <div className="profile-stat-box">
-                        <span>Academic Marks</span>
-                        <strong>12th: {lead.marks_12th ? `${lead.marks_12th}%` : "—"} | 10th: {lead.marks_10th ? `${lead.marks_10th}%` : "—"}</strong>
-                      </div>
-                      <div className="profile-stat-box">
-                        <span>Entrance Exam</span>
-                        <strong>{lead.entrance_exam || "MHT-CET / MGMU-CET"}</strong>
-                      </div>
-                      <div className="profile-stat-box">
-                        <span>Location</span>
-                        <strong>{lead.location || "Maharashtra"}</strong>
-                      </div>
-                    </div>
-
-                    {/* Faculty Assignment Bar */}
-                    <div className="lead-faculty-row">
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <UserCheck size={14} color="#0f766e" />
-                        <span>Assigned Counsellor:</span>
-                        <select
-                          className="lead-faculty-select"
-                          value={lead.assigned_to || ""}
-                          onChange={(e) => updateLeadAssignment(lead.id, e.target.value)}
-                        >
-                          <option value="">-- Unassigned (Admissions Pool) --</option>
-                          {staffList.map((st) => (
-                            <option key={st.user_id} value={st.user_id}>
-                              {st.display_name} {st.user_id === session?.user?.id ? "(You)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {assignedTeacher && (
-                        <span style={{ fontSize: "11px", color: "#0369a1" }}>
-                          Managed by {assignedTeacher.display_name}
-                        </span>
-                      )}
-                    </div>
-
-                    {lead.question && (
-                      <CounsellingTranscriptViewer transcript={lead.question} />
-                    )}
-
-                    {/* Official Counsellor Reply Area */}
-                    <div className="inquiry-reply-area">
-                      <div className="inquiry-reply-header">
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, fontSize: "12.5px", color: "var(--navy)" }}>
-                          <MessageSquare size={14} color="#C05A21" />
-                          <span>Official Counsellor Reply to Student</span>
-                        </div>
-                        <span style={{ fontSize: "11px", color: "#64748B" }}>
-                          Will email {lead.email} &amp; append to conversation transcript
-                        </span>
-                      </div>
-
-                      <textarea
-                        className="inquiry-reply-input"
-                        placeholder={`Write official reply to ${lead.student_name} regarding ${lead.program_interest || "admissions guidance"}...`}
-                        value={inquiryRepliesDraft[lead.id] || ""}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setInquiryRepliesDraft((prev) => ({ ...prev, [lead.id]: val }));
-                        }}
-                      />
-
-                      <div className="inquiry-reply-actions-row">
-                        <button
-                          type="button"
-                          className="primary-button send-reply-btn"
-                          disabled={sendingReplyId === lead.id || !(inquiryRepliesDraft[lead.id] || "").trim()}
-                          onClick={() => sendInquiryReply(lead.id, false)}
-                        >
-                          <Send size={13} />
-                          <span>{sendingReplyId === lead.id ? "Sending & Notifying..." : "Send Reply & Notify Student"}</span>
-                        </button>
-
-                        {/* Delivery Status and Retry */}
-                        {renderInquiryReplyStatus(lead)}
-                      </div>
-                    </div>
-
-                    {/* Inline Counsellor Notes */}
-                    <div className="lead-notes-area">
-                      <div className="lead-notes-header">
-                        <span>Internal Counsellor Notes</span>
-                        {savingNotesId === lead.id && <small style={{ color: "#d97706" }}>Saving...</small>}
-                      </div>
-                      <textarea
-                        className="lead-notes-input"
-                        placeholder="Log calling feedback, verified documents, candidate scholarship eligibility or discussion notes..."
-                        value={leadNotesState[lead.id] !== undefined ? leadNotesState[lead.id] : (lead.counselor_notes || "")}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setLeadNotesState((prev) => ({ ...prev, [lead.id]: val }));
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="save-notes-btn"
-                        onClick={() => saveLeadNotes(lead.id)}
-                        disabled={savingNotesId === lead.id}
-                      >
-                        <Save size={12} /> Save Note
-                      </button>
-                    </div>
-
-                    {/* Lead Actions Bar */}
-                    <div className="lead-actions-bar">
-                      <div className="status-select-wrap">
-                        <span>Update Status:</span>
-                        <select
-                          value={lead.status || "new"}
-                          onChange={(e) => updateLeadStatus(lead.id, e.target.value, leadNotesState[lead.id] || lead.counselor_notes)}
-                        >
-                          <option value="new">New</option>
-                          <option value="contacted">Contacted</option>
-                          <option value="qualified">Qualified</option>
-                          <option value="closed">Closed</option>
-                        </select>
-                      </div>
-
-                      <div className="lead-quick-contact">
-                        {lead.phone && (
-                          <a href={`tel:${cleanPhone}`} className="contact-chip-btn contact-call" title="Direct Phone Call">
-                            <Phone size={13} /> Call
-                          </a>
-                        )}
-
-                        {lead.email && (
-                          <a
-                            href={`mailto:${lead.email}?subject=MGM%20University%20IICT%20Admissions%20-%20Reference%20${encodeURIComponent(lead.reference_code || "")}&body=Dear%20${encodeURIComponent(lead.student_name)},%0A%0AGreetings%20from%20MGM%20University%20IICT%20Admissions%20Committee.`}
-                            className="contact-chip-btn contact-mail"
-                            title="Direct Email"
-                          >
-                            <Mail size={13} /> Email
-                          </a>
-                        )}
-
-                        <button
-                          type="button"
-                          className="contact-chip-btn contact-wa-smart"
-                          onClick={() => setTemplateModalLead(lead)}
-                        >
-                          <MessageCircle size={13} /> Smart WhatsApp
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })
-            ) : (
-              <div className="dashboard-empty">
-                <LockKeyhole size={24} />
-                <h2>No inquiries match the current search or filters</h2>
-                <p>Try resetting the search bar or changing status/program filters.</p>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  style={{ marginTop: "12px" }}
-                  onClick={() => {
-                    setSearchQuery("");
-                    setStatusFilter("all");
-                    setProgramFilter("all");
-                    setScoreFilter("all");
-                    setAssignedFilter("all");
-                  }}
-                >
-                  Reset All Filters
-                </button>
+          {/* TABLE VIEW FOR INQUIRIES */}
+          {inquiriesViewMode === "table" ? (
+            <div className="leads-table-container">
+              <div className="leads-table-header-row">
+                <h3>
+                  Admissions Inquiries Matrix{" "}
+                  <span className="leads-count-pill">{filteredLeads.length} records</span>
+                </h3>
               </div>
-            )}
-          </div>
+
+              {filteredLeads.length === 0 ? (
+                <div className="dashboard-empty-search">
+                  <UsersRound size={32} color="#94A3B8" style={{ margin: "0 auto 8px" }} />
+                  <p>No inquiries match your search or filter criteria.</p>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setStatusFilter("all");
+                      setProgramFilter("all");
+                      setScoreFilter("all");
+                      setAssignedFilter("all");
+                    }}
+                    style={{ marginTop: "10px", fontSize: "12px", padding: "6px 12px" }}
+                  >
+                    Reset All Filters
+                  </button>
+                </div>
+              ) : (
+                <div className="leads-table-scroll-wrapper" tabIndex="0" role="region" aria-label="Admissions Inquiries Table">
+                  <table className="admin-leads-table">
+                    <thead>
+                      <tr>
+                        <th>Inquiry Ref ID</th>
+                        <th>Candidate Details</th>
+                        <th>Program of Interest</th>
+                        <th>Academic Scores</th>
+                        <th>Entrance Exam</th>
+                        <th>Review Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredLeads.map((lead) => {
+                        const refCode = lead.reference_code || `IICT-2026-${(lead.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
+                        const cleanPhone = (lead.phone || "").replace(/\D/g, "");
+
+                        return (
+                          <tr key={lead.id}>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <strong style={{ color: "#C05A21", fontFamily: "monospace", fontSize: "13px" }}>
+                                  {refCode}
+                                </strong>
+                                <button
+                                  type="button"
+                                  className="inquiry-ref-chip-copy"
+                                  onClick={() => copyReference(refCode)}
+                                  title="Copy Inquiry Reference ID"
+                                >
+                                  {copiedRef === refCode ? <Check size={12} color="#16a34a" /> : <Copy size={12} />}
+                                </button>
+                              </div>
+                              <div style={{ fontSize: "11px", color: "#64748B", marginTop: "2px" }}>
+                                {lead.created_at ? new Date(lead.created_at).toLocaleDateString("en-IN") : "Today"}
+                              </div>
+                            </td>
+
+                            <td>
+                              <strong>{lead.student_name}</strong>
+                              <div style={{ fontSize: "11px", color: "#001E32", marginTop: "2px" }}>
+                                <a href={`tel:${cleanPhone}`} style={{ color: "inherit", textDecoration: "none" }}>
+                                  {lead.phone ? `+91 ${lead.phone}` : "—"}
+                                </a>
+                              </div>
+                              <div style={{ fontSize: "11px", color: "#64748B", marginTop: "2px" }}>
+                                <a href={`mailto:${lead.email}`} style={{ color: "inherit", textDecoration: "none" }}>
+                                  {lead.email || "—"}
+                                </a>
+                                {lead.location && ` · ${lead.location}`}
+                              </div>
+                            </td>
+
+                            <td>
+                              <span style={{ fontWeight: 600, color: "#001E32", fontSize: "12.5px" }}>
+                                {lead.program_interest}
+                              </span>
+                              <div style={{ fontSize: "11px", color: "#64748B" }}>
+                                {lead.course_category || "Undergraduate"}
+                              </div>
+                            </td>
+
+                            <td>
+                              <strong style={{ fontSize: "13px", color: "#001E32" }}>
+                                12th: {lead.marks_12th ? `${lead.marks_12th}%` : "—"}
+                              </strong>
+                              <div style={{ fontSize: "11px", color: "#64748B" }}>
+                                10th: {lead.marks_10th ? `${lead.marks_10th}%` : "—"}
+                              </div>
+                            </td>
+
+                            <td>
+                              <span style={{ fontWeight: 600, color: "#001E32", fontSize: "12px" }}>
+                                {lead.entrance_exam || "MGMU-CET / MHT-CET"}
+                              </span>
+                              <div style={{ fontSize: "11px", color: "#64748B" }}>
+                                {lead.entrance_score ? `Score: ${lead.entrance_score}` : "Score pending"}
+                              </div>
+                            </td>
+
+                            <td>
+                              <select
+                                value={lead.status || "new"}
+                                onChange={(e) => updateLeadStatus(lead.id, e.target.value, leadNotesState[lead.id] || lead.counselor_notes)}
+                                className={`status-select-badge ${lead.status || "new"}`}
+                                style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11.5px", fontWeight: 600 }}
+                              >
+                                <option value="new">New</option>
+                                <option value="contacted">Contacted</option>
+                                <option value="qualified">Qualified</option>
+                                <option value="closed">Closed</option>
+                              </select>
+                            </td>
+
+                            <td>
+                              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => setSelectedInquiryModal(lead)}
+                                  style={{ padding: "4px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                                  title="View full candidate profile"
+                                >
+                                  <Eye size={12} /> View
+                                </button>
+                                <button
+                                  type="button"
+                                  className="contact-chip-btn contact-track-btn"
+                                  onClick={() => handleVerifyInquiry(lead)}
+                                  style={{ padding: "4px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                                  title="Test this Inquiry Reference ID in the official tracker"
+                                >
+                                  <ShieldCheck size={12} /> Verify Tracker
+                                </button>
+                                <button
+                                  type="button"
+                                  className="contact-chip-btn contact-wa-smart"
+                                  onClick={() => setTemplateModalLead(lead)}
+                                  style={{ padding: "4px 8px", fontSize: "11px" }}
+                                  title="Send Smart WhatsApp template"
+                                >
+                                  <MessageCircle size={12} /> WhatsApp
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* CARDS VIEW FOR INQUIRIES */
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {filteredLeads.length > 0 ? (
+                filteredLeads.map((lead) => {
+                  const assignedTeacher = staffList.find((s) => s.user_id === lead.assigned_to);
+                  const isAssignedToMe = lead.assigned_to === session?.user?.id;
+                  const cleanPhone = (lead.phone || "").replace(/\D/g, "");
+                  const refCode = lead.reference_code || `IICT-2026-${(lead.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
+
+                  return (
+                    <article key={lead.id} className="lead-card-expanded">
+                      <div className="lead-card-top">
+                        <div className="lead-student-meta">
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                            <strong>{lead.student_name}</strong>
+                            {isAssignedToMe && (
+                              <span style={{ fontSize: "11px", background: "#dbeafe", color: "#1e40af", fontWeight: 700, padding: "2px 8px", borderRadius: "4px" }}>
+                                Assigned to You
+                              </span>
+                            )}
+                            {/* Prominent Reference ID Badge with Copy */}
+                            <div className="inquiry-ref-chip" title="Official Inquiry Reference ID">
+                              <span className="inquiry-ref-chip-label">Inquiry Ref:</span>
+                              <code className="inquiry-ref-chip-code">{refCode}</code>
+                              <button
+                                type="button"
+                                className="inquiry-ref-chip-copy"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  copyReference(refCode);
+                                }}
+                                title="Copy Inquiry Reference ID"
+                                aria-label="Copy Inquiry Reference ID"
+                              >
+                                {copiedRef === refCode ? (
+                                  <>
+                                    <Check size={11} color="#15803d" />
+                                    <span style={{ color: "#15803d" }}>Copied</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy size={11} />
+                                    <span>Copy</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                          <small style={{ marginTop: "4px" }}>
+                            {lead.program_interest} · Submitted {lead.created_at ? new Date(lead.created_at).toLocaleDateString("en-IN") : "Today"}
+                          </small>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <button
+                            type="button"
+                            className="contact-chip-btn contact-track-btn"
+                            onClick={() => handleVerifyInquiry(lead)}
+                            title="Verify that this Reference ID is active in the Tracker"
+                            style={{ padding: "4px 8px", fontSize: "11px" }}
+                          >
+                            <ShieldCheck size={12} /> Verify Tracker
+                          </button>
+                          <span className={`tracker-badge ${lead.status || "new"}`}>
+                            {lead.status === "new" ? "New Lead" : lead.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="lead-profile-grid">
+                        {/* Prominent Inquiry Reference Box */}
+                        <div className="profile-stat-box stat-box-highlight">
+                          <span>Inquiry Reference ID</span>
+                          <strong>{refCode}</strong>
+                        </div>
+                        <div className="profile-stat-box">
+                          <span>Phone / WhatsApp</span>
+                          <strong>
+                            <a href={`tel:${lead.phone}`} style={{ color: "inherit", textDecoration: "none" }}>
+                              {lead.phone}
+                            </a>
+                          </strong>
+                        </div>
+                        <div className="profile-stat-box">
+                          <span>Email</span>
+                          <strong>
+                            <a href={`mailto:${lead.email}`} style={{ color: "inherit", textDecoration: "none" }}>
+                              {lead.email}
+                            </a>
+                          </strong>
+                        </div>
+                        <div className="profile-stat-box">
+                          <span>Academic Marks</span>
+                          <strong>12th: {lead.marks_12th ? `${lead.marks_12th}%` : "—"} | 10th: {lead.marks_10th ? `${lead.marks_10th}%` : "—"}</strong>
+                        </div>
+                        <div className="profile-stat-box">
+                          <span>Entrance Exam</span>
+                          <strong>{lead.entrance_exam || "MHT-CET / MGMU-CET"}</strong>
+                        </div>
+                        <div className="profile-stat-box">
+                          <span>Location</span>
+                          <strong>{lead.location || "Maharashtra"}</strong>
+                        </div>
+                      </div>
+
+                      {/* Faculty Assignment Bar */}
+                      <div className="lead-faculty-row">
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <UserCheck size={14} color="#0f766e" />
+                          <span>Assigned Counsellor:</span>
+                          <select
+                            className="lead-faculty-select"
+                            value={lead.assigned_to || ""}
+                            onChange={(e) => updateLeadAssignment(lead.id, e.target.value)}
+                          >
+                            <option value="">-- Unassigned (Admissions Pool) --</option>
+                            {staffList.map((st) => (
+                              <option key={st.user_id} value={st.user_id}>
+                                {st.display_name} {st.user_id === session?.user?.id ? "(You)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {assignedTeacher && (
+                          <span style={{ fontSize: "11px", color: "#0369a1" }}>
+                            Managed by {assignedTeacher.display_name}
+                          </span>
+                        )}
+                      </div>
+
+                      {lead.question && (
+                        <CounsellingTranscriptViewer transcript={lead.question} />
+                      )}
+
+                      {/* Official Counsellor Reply Area */}
+                      <div className="inquiry-reply-area">
+                        <div className="inquiry-reply-header">
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, fontSize: "12.5px", color: "var(--navy)" }}>
+                            <MessageSquare size={14} color="#C05A21" />
+                            <span>Official Counsellor Reply to Student</span>
+                          </div>
+                          <span style={{ fontSize: "11px", color: "#64748B" }}>
+                            Will email {lead.email} &amp; append to conversation transcript
+                          </span>
+                        </div>
+
+                        <textarea
+                          className="inquiry-reply-input"
+                          placeholder={`Write official reply to ${lead.student_name} regarding ${lead.program_interest || "admissions guidance"}...`}
+                          value={inquiryRepliesDraft[lead.id] || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setInquiryRepliesDraft((prev) => ({ ...prev, [lead.id]: val }));
+                          }}
+                        />
+
+                        <div className="inquiry-reply-actions-row">
+                          <button
+                            type="button"
+                            className="primary-button send-reply-btn"
+                            disabled={sendingReplyId === lead.id || !(inquiryRepliesDraft[lead.id] || "").trim()}
+                            onClick={() => sendInquiryReply(lead.id, false)}
+                          >
+                            <Send size={13} />
+                            <span>{sendingReplyId === lead.id ? "Sending & Notifying..." : "Send Reply & Notify Student"}</span>
+                          </button>
+
+                          {/* Delivery Status and Retry */}
+                          {renderInquiryReplyStatus(lead)}
+                        </div>
+                      </div>
+
+                      {/* Inline Counsellor Notes */}
+                      <div className="lead-notes-area">
+                        <div className="lead-notes-header">
+                          <span>Internal Counsellor Notes</span>
+                          {savingNotesId === lead.id && <small style={{ color: "#d97706" }}>Saving...</small>}
+                        </div>
+                        <textarea
+                          className="lead-notes-input"
+                          placeholder="Log calling feedback, verified documents, candidate scholarship eligibility or discussion notes..."
+                          value={leadNotesState[lead.id] !== undefined ? leadNotesState[lead.id] : (lead.counselor_notes || "")}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setLeadNotesState((prev) => ({ ...prev, [lead.id]: val }));
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="save-notes-btn"
+                          onClick={() => saveLeadNotes(lead.id)}
+                          disabled={savingNotesId === lead.id}
+                        >
+                          <Save size={12} /> Save Note
+                        </button>
+                      </div>
+
+                      {/* Lead Actions Bar */}
+                      <div className="lead-actions-bar">
+                        <div className="status-select-wrap">
+                          <span>Update Status:</span>
+                          <select
+                            value={lead.status || "new"}
+                            onChange={(e) => updateLeadStatus(lead.id, e.target.value, leadNotesState[lead.id] || lead.counselor_notes)}
+                          >
+                            <option value="new">New</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="qualified">Qualified</option>
+                            <option value="closed">Closed</option>
+                          </select>
+                        </div>
+
+                        <div className="lead-quick-contact">
+                          <button
+                            type="button"
+                            className="contact-chip-btn contact-view-btn"
+                            onClick={() => setSelectedInquiryModal(lead)}
+                            title="View full candidate profile & inquiry reference dossier"
+                          >
+                            <Eye size={13} /> View Profile
+                          </button>
+
+                          <button
+                            type="button"
+                            className="contact-chip-btn contact-track-btn"
+                            onClick={() => handleVerifyInquiry(lead)}
+                            title="Verify that this Reference ID works in the applicant tracker"
+                          >
+                            <ShieldCheck size={13} /> Verify in Tracker
+                          </button>
+
+                          {lead.phone && (
+                            <a href={`tel:${cleanPhone}`} className="contact-chip-btn contact-call" title="Direct Phone Call">
+                              <Phone size={13} /> Call
+                            </a>
+                          )}
+
+                          {lead.email && (
+                            <a
+                              href={`mailto:${lead.email}?subject=MGM%20University%20IICT%20Admissions%20-%20Reference%20${encodeURIComponent(refCode)}&body=Dear%20${encodeURIComponent(lead.student_name)},%0A%0AGreetings%20from%20MGM%20University%20IICT%20Admissions%20Committee.`}
+                              className="contact-chip-btn contact-mail"
+                              title="Direct Email"
+                            >
+                              <Mail size={13} /> Email
+                            </a>
+                          )}
+
+                          <button
+                            type="button"
+                            className="contact-chip-btn contact-wa-smart"
+                            onClick={() => setTemplateModalLead(lead)}
+                          >
+                            <MessageCircle size={13} /> Smart WhatsApp
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })
+              ) : (
+                <div className="dashboard-empty">
+                  <LockKeyhole size={24} />
+                  <h2>No inquiries match the current search or filters</h2>
+                  <p>Try resetting the search bar or changing status/program filters.</p>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{ marginTop: "12px" }}
+                    onClick={() => {
+                      setSearchQuery("");
+                      setStatusFilter("all");
+                      setProgramFilter("all");
+                      setScoreFilter("all");
+                      setAssignedFilter("all");
+                    }}
+                  >
+                    Reset All Filters
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -2102,6 +2389,268 @@ export function Dashboard({ session, onExit }) {
           </div>
         </div>
       )}
+
+      {/* Full Inquiry Profile & Reference ID Dossier Modal */}
+      {selectedInquiryModal && (() => {
+        const modalRefCode = selectedInquiryModal.reference_code || `IICT-2026-${(selectedInquiryModal.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
+        const modalCleanPhone = (selectedInquiryModal.phone || "").replace(/\D/g, "");
+
+        return (
+          <div className="wa-modal-overlay" onClick={() => setSelectedInquiryModal(null)}>
+            <div className="wa-modal-box" style={{ maxWidth: "700px" }} onClick={(e) => e.stopPropagation()}>
+              <div className="wa-modal-header">
+                <div>
+                  <span className="eyebrow" style={{ margin: 0 }}>OFFICIAL INQUIRY CANDIDATE DOSSIER</span>
+                  <h3 style={{ margin: "2px 0 0", color: "#001E32" }}>
+                    {selectedInquiryModal.student_name}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedInquiryModal(null)}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280" }}
+                  aria-label="Close dialog"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="wa-modal-body" style={{ maxHeight: "78vh", overflowY: "auto" }}>
+                {/* Prominent Official Inquiry Reference Banner */}
+                <div className="inquiry-modal-ref-banner">
+                  <div>
+                    <div style={{ fontSize: "11px", color: "#8C3A0B", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.5px" }}>
+                      Official Inquiry Reference ID
+                    </div>
+                    <strong style={{ fontSize: "19px", fontFamily: "monospace", color: "#C05A21", letterSpacing: "0.8px" }}>
+                      {modalRefCode}
+                    </strong>
+                    <div style={{ fontSize: "11px", color: "#64748B", marginTop: "3px" }}>
+                      Submitted {selectedInquiryModal.created_at ? new Date(selectedInquiryModal.created_at).toLocaleString("en-IN") : "Today"}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="inquiry-ref-chip-copy"
+                      onClick={() => copyReference(modalRefCode)}
+                      style={{ background: "#FFFFFF", border: "1px solid #FCD7BD", padding: "6px 12px", fontSize: "12px", borderRadius: "6px" }}
+                      title="Copy Reference ID to clipboard"
+                    >
+                      {copiedRef === modalRefCode ? (
+                        <>
+                          <Check size={13} color="#15803d" />
+                          <span style={{ color: "#15803d", fontWeight: 700 }}>Copied ID!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={13} />
+                          <span>Copy Reference ID</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => {
+                        handleVerifyInquiry(selectedInquiryModal);
+                      }}
+                      style={{ fontSize: "12px", padding: "6px 14px", display: "inline-flex", alignItems: "center", gap: "6px" }}
+                      title="Test and verify that this Reference ID works in the applicant tracker"
+                    >
+                      <ShieldCheck size={14} /> Test in Live Tracker
+                    </button>
+                  </div>
+                </div>
+
+                {/* Candidate Information Grid */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginTop: "16px" }}>
+                  <div style={{ background: "#FFFFFF", padding: "10px", border: "1px solid #E2E8F0", borderRadius: "6px" }}>
+                    <small style={{ color: "#64748B", display: "block" }}>Program of Interest</small>
+                    <strong style={{ color: "#001E32", fontSize: "13px" }}>{selectedInquiryModal.program_interest}</strong>
+                    <div style={{ fontSize: "11px", color: "#64748B", marginTop: "2px" }}>
+                      {selectedInquiryModal.course_category || "Undergraduate"}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "#FFFFFF", padding: "10px", border: "1px solid #E2E8F0", borderRadius: "6px" }}>
+                    <small style={{ color: "#64748B", display: "block" }}>Mobile Number</small>
+                    <strong style={{ color: "#001E32", fontSize: "13px" }}>
+                      <a href={`tel:${modalCleanPhone}`} style={{ color: "inherit", textDecoration: "none" }}>
+                        +91 {selectedInquiryModal.phone}
+                      </a>
+                    </strong>
+                    <div style={{ fontSize: "11px", color: "#166534", marginTop: "2px" }}>
+                      Dual-Factor Tracking Key Active
+                    </div>
+                  </div>
+
+                  <div style={{ background: "#FFFFFF", padding: "10px", border: "1px solid #E2E8F0", borderRadius: "6px" }}>
+                    <small style={{ color: "#64748B", display: "block" }}>Candidate Email</small>
+                    <strong style={{ color: "#001E32", fontSize: "12.5px" }}>
+                      <a href={`mailto:${selectedInquiryModal.email}`} style={{ color: "inherit", textDecoration: "none" }}>
+                        {selectedInquiryModal.email}
+                      </a>
+                    </strong>
+                  </div>
+
+                  <div style={{ background: "#FFFFFF", padding: "10px", border: "1px solid #E2E8F0", borderRadius: "6px" }}>
+                    <small style={{ color: "#64748B", display: "block" }}>Academic Marks</small>
+                    <strong style={{ color: "#001E32", fontSize: "13px" }}>
+                      12th: {selectedInquiryModal.marks_12th ? `${selectedInquiryModal.marks_12th}%` : "—"} | 10th: {selectedInquiryModal.marks_10th ? `${selectedInquiryModal.marks_10th}%` : "—"}
+                    </strong>
+                  </div>
+
+                  <div style={{ background: "#FFFFFF", padding: "10px", border: "1px solid #E2E8F0", borderRadius: "6px" }}>
+                    <small style={{ color: "#64748B", display: "block" }}>Entrance Exam &amp; Score</small>
+                    <strong style={{ color: "#001E32", fontSize: "13px" }}>
+                      {selectedInquiryModal.entrance_exam || "MGMU-CET / MHT-CET"}
+                    </strong>
+                    {selectedInquiryModal.entrance_score && (
+                      <div style={{ fontSize: "11px", color: "#64748B" }}>
+                        Score: {selectedInquiryModal.entrance_score}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ background: "#FFFFFF", padding: "10px", border: "1px solid #E2E8F0", borderRadius: "6px" }}>
+                    <small style={{ color: "#64748B", display: "block" }}>Location</small>
+                    <strong style={{ color: "#001E32", fontSize: "13px" }}>
+                      {selectedInquiryModal.location || "Maharashtra"}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Faculty Assignment */}
+                <div style={{ marginTop: "14px", display: "flex", alignItems: "center", gap: "8px", background: "#f8fafc", padding: "10px 14px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                  <UserCheck size={16} color="#0f766e" />
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "#334155" }}>Assigned Faculty Counsellor:</span>
+                  <select
+                    className="lead-faculty-select"
+                    value={selectedInquiryModal.assigned_to || ""}
+                    onChange={(e) => {
+                      const newAssignee = e.target.value;
+                      updateLeadAssignment(selectedInquiryModal.id, newAssignee);
+                      setSelectedInquiryModal((prev) => ({ ...prev, assigned_to: newAssignee }));
+                    }}
+                  >
+                    <option value="">-- Unassigned (Admissions Pool) --</option>
+                    {staffList.map((st) => (
+                      <option key={st.user_id} value={st.user_id}>
+                        {st.display_name} {st.user_id === session?.user?.id ? "(You)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Question / Transcript Viewer */}
+                {selectedInquiryModal.question && (
+                  <div style={{ marginTop: "14px" }}>
+                    <CounsellingTranscriptViewer transcript={selectedInquiryModal.question} />
+                  </div>
+                )}
+
+                {/* Official Reply Box in Modal */}
+                <div className="inquiry-reply-area" style={{ marginTop: "14px" }}>
+                  <div className="inquiry-reply-header">
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, fontSize: "12.5px", color: "var(--navy)" }}>
+                      <MessageSquare size={14} color="#C05A21" />
+                      <span>Official Counsellor Reply to Student</span>
+                    </div>
+                    <span style={{ fontSize: "11px", color: "#64748B" }}>
+                      Will email {selectedInquiryModal.email}
+                    </span>
+                  </div>
+
+                  <textarea
+                    className="inquiry-reply-input"
+                    placeholder={`Write official reply to ${selectedInquiryModal.student_name}...`}
+                    value={inquiryRepliesDraft[selectedInquiryModal.id] || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setInquiryRepliesDraft((prev) => ({ ...prev, [selectedInquiryModal.id]: val }));
+                    }}
+                  />
+
+                  <div className="inquiry-reply-actions-row">
+                    <button
+                      type="button"
+                      className="primary-button send-reply-btn"
+                      disabled={sendingReplyId === selectedInquiryModal.id || !(inquiryRepliesDraft[selectedInquiryModal.id] || "").trim()}
+                      onClick={() => sendInquiryReply(selectedInquiryModal.id, false)}
+                    >
+                      <Send size={13} />
+                      <span>{sendingReplyId === selectedInquiryModal.id ? "Sending & Notifying..." : "Send Reply & Notify Student"}</span>
+                    </button>
+                    {renderInquiryReplyStatus(selectedInquiryModal)}
+                  </div>
+                </div>
+
+                {/* Notes and Status */}
+                <div style={{ marginTop: "14px", background: "#FFF8F3", padding: "14px 16px", borderRadius: "8px", border: "1px solid #FCD7BD" }}>
+                  <h4 style={{ margin: "0 0 8px", color: "#8C3A0B", fontSize: "13px" }}>Counselor Calling Notes &amp; Status</h4>
+                  <textarea
+                    rows={2}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #CBD5E1", fontSize: "12.5px" }}
+                    placeholder="Record notes from call..."
+                    value={leadNotesState[selectedInquiryModal.id] !== undefined ? leadNotesState[selectedInquiryModal.id] : (selectedInquiryModal.counselor_notes || "")}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setLeadNotesState((prev) => ({ ...prev, [selectedInquiryModal.id]: val }));
+                    }}
+                  />
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      style={{ fontSize: "11.5px", padding: "6px 12px" }}
+                      onClick={() => saveLeadNotes(selectedInquiryModal.id)}
+                      disabled={savingNotesId === selectedInquiryModal.id}
+                    >
+                      <Save size={13} /> Save Notes
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      style={{ fontSize: "11.5px", padding: "6px 12px" }}
+                      onClick={() => {
+                        updateLeadStatus(selectedInquiryModal.id, "contacted", leadNotesState[selectedInquiryModal.id] || selectedInquiryModal.counselor_notes);
+                        setSelectedInquiryModal((prev) => ({ ...prev, status: "contacted" }));
+                      }}
+                    >
+                      Mark Contacted
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      style={{ fontSize: "11.5px", padding: "6px 12px" }}
+                      onClick={() => {
+                        updateLeadStatus(selectedInquiryModal.id, "qualified", leadNotesState[selectedInquiryModal.id] || selectedInquiryModal.counselor_notes);
+                        setSelectedInquiryModal((prev) => ({ ...prev, status: "qualified" }));
+                      }}
+                    >
+                      Mark Qualified
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      style={{ fontSize: "11.5px", padding: "6px 12px" }}
+                      onClick={() => {
+                        updateLeadStatus(selectedInquiryModal.id, "closed", leadNotesState[selectedInquiryModal.id] || selectedInquiryModal.counselor_notes);
+                        setSelectedInquiryModal((prev) => ({ ...prev, status: "closed" }));
+                      }}
+                    >
+                      Close Inquiry
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </main>
   );
 }

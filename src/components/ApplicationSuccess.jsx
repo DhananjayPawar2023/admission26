@@ -9,6 +9,7 @@ import {
   GraduationCap,
   Home,
   Lock,
+  Mail,
   PhoneCall,
   Printer,
   Search,
@@ -112,6 +113,30 @@ export function ApplicationSuccess({
             </span>
           </div>
         </div>
+
+        {application?.email_delivery_status && (
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              marginTop: 14,
+              padding: 14,
+              borderRadius: 10,
+              background: application.email_delivered ? "#F0FDF4" : "#FFF7ED",
+              border: `1px solid ${application.email_delivered ? "#BBF7D0" : "#FED7AA"}`,
+              color: application.email_delivered ? "#166534" : "#9A3412"
+            }}
+          >
+            <Mail size={18} aria-hidden="true" />
+            <span>
+              {application.email_delivered
+                ? `We sent your application details and in-progress status to ${application.email}.`
+                : `Your application is saved, but we could not send the confirmation email to ${application.email}. Please contact the admissions helpline if it does not arrive shortly.`}
+            </span>
+          </div>
+        )}
 
         {/* Honest Admissions Notice: No seat claimed or payment taken */}
         <div className="app-notice-box">

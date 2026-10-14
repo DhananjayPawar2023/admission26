@@ -31,63 +31,12 @@ export function MyInquiryModal({
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  useEffect(() => {
-    if (isOpen) {
-      if (initialReference) {
-        setRefCode(initialReference);
-        if (initialReference.toUpperCase().startsWith("IICT-")) {
-          setActiveTab("inquiry");
-        } else {
-          setActiveTab("application");
-        }
-      }
-      if (initialPhone) {
-        setPhoneNumber(initialPhone);
-      }
-
-      // If nothing was passed, check localStorage for last application or inquiry
-      if (!initialReference && !initialPhone) {
-        const lastApp = localStorage.getItem("iict_last_application");
-        const lastInq = localStorage.getItem("iict_last_inquiry");
-
-        if (lastApp) {
-          try {
-            const parsed = JSON.parse(lastApp);
-            setRefCode(parsed.application_number || "");
-            setPhoneNumber(parsed.phone || "");
-            setActiveTab("application");
-          } catch {}
-        } else if (lastInq) {
-          try {
-            const parsed = JSON.parse(lastInq);
-            setRefCode(parsed.reference_code || "");
-            setPhoneNumber(parsed.phone || "");
-            setActiveTab("inquiry");
-          } catch {}
-        }
-      }
-    }
-  }, [isOpen, initialReference, initialPhone]);
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === "Escape" && isOpen) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
-  const handleTrack = async (e) => {
-    e?.preventDefault();
+  const executeTrack = async (targetRef, targetPhone, targetTab) => {
     setSearchError("");
     setSearchResult(null);
 
-    const cleanRef = refCode.trim().toUpperCase();
-    const cleanPhone = normalizePhone(phoneNumber);
+    const cleanRef = (targetRef || "").trim().toUpperCase();
+    const cleanPhone = normalizePhone(targetPhone || "");
 
     if (!cleanRef) {
       setSearchError("Please enter your reference or application ID.");
@@ -102,7 +51,7 @@ export function MyInquiryModal({
     setLoading(true);
     setSearched(true);
 
-    const isApp = cleanRef.includes("APP") || activeTab === "application";
+    const isApp = cleanRef.includes("APP") || targetTab === "application";
 
     if (!supabase) {
       setSearchError("Admissions database service is not configured. Please contact the IICT admissions desk directly.");
@@ -163,6 +112,81 @@ export function MyInquiryModal({
     }
 
     setLoading(false);
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      let resolvedRef = initialReference;
+      let resolvedPhone = initialPhone;
+      let resolvedTab = initialType;
+
+      if (initialReference) {
+        setRefCode(initialReference);
+        if (initialReference.toUpperCase().startsWith("IICT-")) {
+          resolvedTab = "inquiry";
+          setActiveTab("inquiry");
+        } else {
+          resolvedTab = "application";
+          setActiveTab("application");
+        }
+      }
+      if (initialPhone) {
+        setPhoneNumber(initialPhone);
+      }
+
+      // If nothing was passed, check localStorage for last application or inquiry
+      if (!initialReference && !initialPhone) {
+        const lastApp = localStorage.getItem("iict_last_application");
+        const lastInq = localStorage.getItem("iict_last_inquiry");
+
+        if (lastApp) {
+          try {
+            const parsed = JSON.parse(lastApp);
+            resolvedRef = parsed.application_number || "";
+            resolvedPhone = parsed.phone || "";
+            resolvedTab = "application";
+            setRefCode(resolvedRef);
+            setPhoneNumber(resolvedPhone);
+            setActiveTab("application");
+          } catch {}
+        } else if (lastInq) {
+          try {
+            const parsed = JSON.parse(lastInq);
+            resolvedRef = parsed.reference_code || "";
+            resolvedPhone = parsed.phone || "";
+            resolvedTab = "inquiry";
+            setRefCode(resolvedRef);
+            setPhoneNumber(resolvedPhone);
+            setActiveTab("inquiry");
+          } catch {}
+        }
+      }
+
+      if (resolvedRef && normalizePhone(resolvedPhone).length >= 10) {
+        executeTrack(resolvedRef, resolvedPhone, resolvedTab);
+      } else {
+        setSearchResult(null);
+        setSearched(false);
+        setSearchError("");
+      }
+    }
+  }, [isOpen, initialReference, initialPhone]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const handleTrack = async (e) => {
+    e?.preventDefault();
+    executeTrack(refCode, phoneNumber, activeTab);
   };
 
   const getStatusMilestone = (status, type) => {

@@ -286,6 +286,31 @@ export function App() {
       return;
     }
 
+    // Send the receipt only after the database confirms the application was saved.
+    // Email failure must not discard a valid application submission.
+    let emailDelivery = { status: "failed", delivered: false };
+    try {
+      const emailResponse = await fetch("/api/application-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          application_number: confirmedRecord.application_number,
+          email: confirmedRecord.email,
+          phone: confirmedRecord.phone
+        })
+      });
+      const emailData = await emailResponse.json().catch(() => ({}));
+      emailDelivery = emailData.emailDelivery || emailDelivery;
+    } catch {
+      // Keep the confirmed application visible even if the email service is unavailable.
+    }
+
+    confirmedRecord = {
+      ...confirmedRecord,
+      email_delivery_status: emailDelivery.status,
+      email_delivered: Boolean(emailDelivery.delivered)
+    };
+
     setApplicationLead(confirmedRecord);
 
     try {
@@ -460,6 +485,7 @@ export function App() {
         (session ? (
           <Dashboard
             session={session}
+            onOpenTracker={openTracker}
             onExit={() => {
               setSession(null);
               navigateTo("home", "/");
@@ -478,6 +504,7 @@ export function App() {
       {view === "dashboard" && (
         <Dashboard
           session={session}
+          onOpenTracker={openTracker}
           onExit={() => navigateTo("home", "/")}
         />
       )}

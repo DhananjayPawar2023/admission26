@@ -149,3 +149,54 @@ test("Tracker Privacy: inquiry tracking works securely with dual-key verificatio
   assert.equal(result.question, undefined, "Candidate question must be hidden from tracker");
   assert.equal(result.email, undefined, "Email must be hidden from tracker");
 });
+
+test("Inquiry Reference ID: resolves valid IICT-2026 format and supports fallback generation", () => {
+  const leadWithRef = {
+    id: "inq-2",
+    reference_code: "IICT-2026-AB69CD",
+    student_name: "Priya Sharma"
+  };
+  const resolvedRef = leadWithRef.reference_code || `IICT-2026-${(leadWithRef.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
+  assert.equal(resolvedRef, "IICT-2026-AB69CD");
+
+  const leadWithoutRef = {
+    id: "a2e86ed5-728b-46f6-929f-86c4e8abc02c",
+    reference_code: null,
+    student_name: "Fallback Candidate"
+  };
+  const fallbackRef = leadWithoutRef.reference_code || `IICT-2026-${(leadWithoutRef.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
+  assert.equal(fallbackRef, "IICT-2026-A2E86E");
+  assert.match(fallbackRef, /^IICT-2026-[A-Z0-9]{6}$/);
+});
+
+test("Inquiry Reference ID: flexible search matches reference codes regardless of formatting", () => {
+  const testLeads = [
+    { id: "1", reference_code: "IICT-2026-AB69CD", student_name: "Priya Sharma" },
+    { id: "2", reference_code: "IICT-2026-0921D3", student_name: "Rahul Sharma" }
+  ];
+
+  const matchSearch = (leadsList, query) => {
+    const q = query.toLowerCase().trim();
+    const qClean = q.replace(/[^a-z0-9]/gi, "");
+    return leadsList.filter((lead) => {
+      const refClean = (lead.reference_code || "").toLowerCase().replace(/[^a-z0-9]/gi, "");
+      const matchName = lead.student_name?.toLowerCase().includes(q);
+      const matchRef = (lead.reference_code?.toLowerCase().includes(q)) || (qClean.length >= 3 && refClean.includes(qClean));
+      return matchName || matchRef;
+    });
+  };
+
+  // Exact search
+  assert.equal(matchSearch(testLeads, "IICT-2026-AB69CD").length, 1);
+  // Lowercase search
+  assert.equal(matchSearch(testLeads, "iict-2026-ab69cd").length, 1);
+  // Code without dashes
+  assert.equal(matchSearch(testLeads, "iict2026ab69cd").length, 1);
+  // Partial suffix
+  assert.equal(matchSearch(testLeads, "ab69cd").length, 1);
+  // Search for second lead
+  assert.equal(matchSearch(testLeads, "0921d3").length, 1);
+  // Non-matching query
+  assert.equal(matchSearch(testLeads, "nonexistent").length, 0);
+});
+

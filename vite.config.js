@@ -4,6 +4,7 @@ import grantHandler from "./api/grant-staff.js";
 import syncHandler from "./api/sync-staff.js";
 import updateAppStatusHandler from "./api/update-application-status.js";
 import replyInquiryHandler from "./api/reply-inquiry.js";
+import applicationConfirmationHandler from "./api/application-confirmation.js";
 import { getServiceRoleKey, getSupabaseUrl, getResendApiKey } from "./api/env-helper.js";
 
 function apiMiddleware(env = {}) {
@@ -30,7 +31,8 @@ function apiMiddleware(env = {}) {
           "/api/grant-staff": grantHandler,
           "/api/sync-staff": syncHandler,
           "/api/update-application-status": updateAppStatusHandler,
-          "/api/reply-inquiry": replyInquiryHandler
+          "/api/reply-inquiry": replyInquiryHandler,
+          "/api/application-confirmation": applicationConfirmationHandler
         };
 
         if (apiRoutes[url]) {
