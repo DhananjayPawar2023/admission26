@@ -91,14 +91,15 @@ export default async function handler(req, res, { supabaseAdminClient, emailClie
   const applicationNumber = (body.applicationNumber || body.application_number || "").trim();
   const nextStatus = (body.nextStatus || body.status || "").toLowerCase().trim();
   const scrutinyNotes = body.scrutinyNotes !== undefined ? body.scrutinyNotes : body.scrutiny_notes;
+  const assignedTo = body.assignedTo !== undefined ? body.assignedTo : body.assigned_to;
   const forceRetryEmail = Boolean(body.forceRetryEmail || body.force_retry);
 
   if (!applicationId && !applicationNumber) {
     return res.status(400).json({ error: "Application ID or Application Number is required." });
   }
 
-  if (!nextStatus && !forceRetryEmail) {
-    return res.status(400).json({ error: "A valid target status is required." });
+  if (!nextStatus && !forceRetryEmail && assignedTo === undefined && scrutinyNotes === undefined) {
+    return res.status(400).json({ error: "A valid target status or update field is required." });
   }
 
   try {
@@ -120,22 +121,32 @@ export default async function handler(req, res, { supabaseAdminClient, emailClie
     const targetStatus = nextStatus || currentStatus;
     const isStatusChanged = targetStatus !== currentStatus;
     const notesToSave = scrutinyNotes !== undefined ? scrutinyNotes : (appRecord.scrutiny_notes || "");
+    const isAssignChanged = assignedTo !== undefined && assignedTo !== appRecord.assigned_to;
 
     // 5. Prevent duplicate emails: if status is unchanged and this is not a force-retry, skip email
     if (!isStatusChanged && !forceRetryEmail) {
-      // If only notes changed, update notes in DB without emailing
+      // If only notes or reviewer assigned changed, update DB without emailing
+      const partialUpdate = {};
       if (scrutinyNotes !== undefined && scrutinyNotes !== appRecord.scrutiny_notes) {
+        partialUpdate.scrutiny_notes = notesToSave;
+      }
+      if (isAssignChanged) {
+        partialUpdate.assigned_to = assignedTo || null;
+      }
+
+      if (Object.keys(partialUpdate).length > 0) {
+        partialUpdate.updated_at = new Date().toISOString();
         await supabaseAdmin
           .from("applications")
-          .update({ scrutiny_notes: notesToSave, updated_at: new Date().toISOString() })
+          .update(partialUpdate)
           .eq("id", appRecord.id);
-        appRecord.scrutiny_notes = notesToSave;
+        Object.assign(appRecord, partialUpdate);
       }
 
       return res.status(200).json({
         success: true,
-        updated: false,
-        application: { ...appRecord, scrutiny_notes: notesToSave },
+        updated: Object.keys(partialUpdate).length > 0,
+        application: { ...appRecord, scrutiny_notes: notesToSave, ...(assignedTo !== undefined ? { assigned_to: assignedTo || null } : {}) },
         emailDelivery: {
           status: "skipped_duplicate",
           message: "Application status was not changed. Email notification skipped to avoid duplicate applicant messages."
@@ -147,6 +158,7 @@ export default async function handler(req, res, { supabaseAdminClient, emailClie
     const updatePayload = {
       status: targetStatus,
       scrutiny_notes: notesToSave,
+      ...(assignedTo !== undefined ? { assigned_to: assignedTo || null } : {}),
       updated_at: new Date().toISOString()
     };
 

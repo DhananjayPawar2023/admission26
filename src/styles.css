@@ -4971,5 +4971,522 @@ textarea:focus-visible,
   flex-wrap: wrap;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   13. SUPER ADMIN ENHANCEMENTS: CLICKABLE KPIS, VERIFICATION CHECKLIST & AUDIT
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Clickable KPI Cards */
+.admin-kpi-card.clickable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  outline: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.admin-kpi-card.clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 30, 50, 0.08);
+  border-color: #CBD5E1;
+}
+
+.admin-kpi-card.clickable:focus-visible {
+  box-shadow: 0 0 0 3px rgba(192, 90, 33, 0.25);
+}
+
+.admin-kpi-card.clickable.active-kpi {
+  border-color: #C05A21;
+  background: #FFFDFB;
+  box-shadow: 0 0 0 2px rgba(192, 90, 33, 0.2), 0 6px 18px rgba(192, 90, 33, 0.08);
+}
+
+.kpi-active-pill {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #C05A21;
+  background: #FFEDD5;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+  border: 1px solid #FCD7BD;
+}
+
+/* Actions Column in Direct Applications Table */
+.app-actions-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 210px;
+}
+
+.app-action-btn.view {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.app-assign-reviewer-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.app-assign-select {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  color: #334155;
+  padding: 4px 2px;
+  cursor: pointer;
+  outline: none;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.app-inline-note-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-inline-note-input {
+  flex: 1;
+  min-width: 110px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid #CBD5E1;
+  border-radius: 4px;
+  outline: none;
+  background: #ffffff;
+  transition: border-color 0.15s ease;
+}
+
+.app-inline-note-input:focus {
+  border-color: #C05A21;
+}
+
+.app-inline-note-save {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #CBD5E1;
+  background: #F1F5F9;
+  color: #334155;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: background 0.15s ease;
+}
+
+.app-inline-note-save:hover {
+  background: #E2E8F0;
+}
+
+.app-email-action-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.app-email-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #F8FAFC;
+  border: 1px solid #CBD5E1;
+  border-radius: 5px;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.app-email-action-btn:hover:not(:disabled) {
+  background: #EFF6FF;
+  border-color: #93C5FD;
+  color: #1D4ED8;
+}
+
+/* Document & Eligibility Verification Checklist */
+.verification-checklist-card {
+  margin-top: 16px;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.verification-checklist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.verification-checklist-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.verification-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.verification-progress-bar {
+  width: 120px;
+  height: 8px;
+  background: #E2E8F0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.verification-progress-fill {
+  height: 100%;
+  background: #10B981;
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+
+.verification-progress-text {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #047857;
+}
+
+.checklist-items-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.checklist-item-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.checklist-item-row:hover {
+  background: #FAFBFD;
+  border-color: #CBD5E1;
+}
+
+.checklist-item-row.checked {
+  background: #F0FDF4;
+  border-color: #BBF7D0;
+}
+
+.checklist-item-label {
+  flex: 1;
+  font-size: 12.5px;
+  color: #1E293B;
+  font-weight: 500;
+}
+
+.checklist-item-status-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.checklist-item-status-badge.verified {
+  background: #DCFCE7;
+  color: #15803D;
+  border: 1px solid #BBF7D0;
+}
+
+.checklist-item-status-badge.pending {
+  background: #F1F5F9;
+  color: #64748B;
+  border: 1px solid #E2E8F0;
+}
+
+/* Application Scrutiny & Status History Audit Timeline */
+.audit-timeline-container {
+  margin-top: 16px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.audit-timeline-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.audit-timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  padding-left: 20px;
+}
+
+.audit-timeline-list::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 7px;
+  width: 2px;
+  background: #E2E8F0;
+}
+
+.audit-timeline-step {
+  position: relative;
+  font-size: 12px;
+}
+
+.audit-timeline-step::before {
+  content: "";
+  position: absolute;
+  left: -17px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #C05A21;
+}
+
+.audit-timeline-step strong {
+  color: #001E32;
+  font-weight: 700;
+}
+
+.audit-timeline-step .time-sub {
+  color: #64748B;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* Inquiry Quick Filters & Overdue Badges */
+.inquiry-quick-filter-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.inquiry-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.inquiry-pill-btn:hover {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+}
+
+.inquiry-pill-btn.active {
+  background: #C05A21;
+  color: #FFFFFF;
+  border-color: #C05A21;
+}
+
+.inquiry-pill-btn.overdue {
+  border-color: #FED7AA;
+  background: #FFF7ED;
+  color: #C2410C;
+}
+
+.inquiry-pill-btn.overdue.active {
+  background: #EA580C;
+  color: #FFFFFF;
+  border-color: #EA580C;
+}
+
+.inquiry-pill-btn .pill-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.inquiry-pill-btn.active .pill-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #FFFFFF;
+}
+
+.overdue-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #DC2626;
+  background: #FEF2F2;
+  border: 1px solid #FCA5A5;
+  padding: 2px 7px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+
+.table-assign-select {
+  padding: 4px 6px;
+  font-size: 11.5px;
+  border: 1px solid #CBD5E1;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #334155;
+  outline: none;
+  max-width: 140px;
+}
+
+/* Staff Access Management: Role Select & Onboarding Modal */
+.staff-role-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #CBD5E1;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #1E293B;
+  outline: none;
+  cursor: pointer;
+}
+
+.staff-role-select:focus {
+  border-color: #C05A21;
+}
+
+.staff-credentials-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 30, 50, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.staff-credentials-modal {
+  background: #FFFFFF;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(0, 30, 50, 0.2);
+  width: 100%;
+  max-width: 520px;
+  padding: 24px;
+  border: 1px solid #E2E8F0;
+}
+
+.staff-credentials-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.credentials-box {
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.credentials-box .cred-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #F1F5F9;
+  padding-bottom: 6px;
+}
+
+.credentials-box .cred-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.credentials-box .cred-label {
+  color: #64748B;
+  font-weight: 600;
+}
+
+.credentials-box .cred-val {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: #001E32;
+  font-weight: 700;
+}
+
+.staff-alert-banner {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.staff-alert-banner.success {
+  background: #ECFDF5;
+  border: 1px solid #A7F3D0;
+  color: #065F46;
+}
+
+.staff-alert-banner.error {
+  background: #FEF2F2;
+  border: 1px solid #FCA5A5;
+  color: #991B1B;
+}
+
 
 

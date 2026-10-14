@@ -26,12 +26,16 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  Square,
   Table,
   TrendingUp,
   UserCheck,
   UserPlus,
   UsersRound,
-  X
+  X,
+  CheckSquare,
+  History,
+  ListChecks
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fallbackPrograms } from "../data/programsData";
@@ -53,11 +57,22 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
   const [selectedAppModal, setSelectedAppModal] = useState(null);
   const [updatingAppId, setUpdatingAppId] = useState(null);
   const [appNotesDraft, setAppNotesDraft] = useState({});
+  const [savingAppNotesId, setSavingAppNotesId] = useState(null);
   const [appEmailFeedback, setAppEmailFeedback] = useState({});
   const [retryingEmailAppId, setRetryingEmailAppId] = useState(null);
 
+  // Application Verification Checklists (persisted locally)
+  const [appChecklists, setAppChecklists] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("iict_app_checklists") || "{}");
+    } catch {
+      return {};
+    }
+  });
+
   const [leads, setLeads] = useState([]);
   const [inquiriesViewMode, setInquiriesViewMode] = useState("cards"); // "cards" | "table"
+  const [quickInquiryFilter, setQuickInquiryFilter] = useState("all"); // "all" | "unassigned" | "assigned_me" | "overdue" | "contacted" | "qualified"
   const [selectedInquiryModal, setSelectedInquiryModal] = useState(null);
   const [copiedRef, setCopiedRef] = useState(null);
   const [inquiryRepliesDraft, setInquiryRepliesDraft] = useState({});
@@ -79,6 +94,10 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
   const [grantMsg, setGrantMsg] = useState("");
   const [revokingEmail, setRevokingEmail] = useState(null);
   const [apiHealth, setApiHealth] = useState({ status: "online" });
+  const [updatingStaffRoleId, setUpdatingStaffRoleId] = useState(null);
+  const [staffActionBanner, setStaffActionBanner] = useState(null); // { type: "success" | "error", message: string }
+  const [lastGrantedStaff, setLastGrantedStaff] = useState(null);
+  const [copiedCredentials, setCopiedCredentials] = useState(false);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -374,6 +393,178 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
     setRetryingEmailAppId(null);
   };
 
+  const updateAppAssignment = async (app, teacherUserId) => {
+    const key = app.id || app.application_number;
+    const newAssignedTo = teacherUserId || null;
+
+    if (session?.access_token) {
+      try {
+        await fetch("/api/update-application-status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({
+            applicationId: app.id,
+            applicationNumber: app.application_number,
+            assignedTo: newAssignedTo
+          })
+        });
+      } catch (e) {
+        console.warn("API app assign warning:", e);
+      }
+    }
+
+    if (supabase && app.id) {
+      try {
+        await supabase
+          .from("applications")
+          .update({ assigned_to: newAssignedTo, updated_at: new Date().toISOString() })
+          .eq("id", app.id);
+      } catch (err) {
+        console.warn("Direct DB app assign warning:", err);
+      }
+    }
+
+    setApplications((prev) =>
+      prev.map((a) =>
+        (a.id === app.id || a.application_number === app.application_number)
+          ? { ...a, assigned_to: newAssignedTo }
+          : a
+      )
+    );
+
+    if (selectedAppModal && selectedAppModal.application_number === app.application_number) {
+      setSelectedAppModal((prev) => ({ ...prev, assigned_to: newAssignedTo }));
+    }
+  };
+
+  const saveAppScrutinyNote = async (app) => {
+    const key = app.id || app.application_number;
+    setSavingAppNotesId(key);
+    const notes = appNotesDraft[key] !== undefined ? appNotesDraft[key] : (app.scrutiny_notes || "");
+    await updateApplicationStatus(app, app.status || "submitted", notes, false);
+    setSavingAppNotesId(null);
+  };
+
+  const VERIFICATION_CHECKLIST_ITEMS = [
+    { id: "marksheet_10th", label: "10th Marksheet & Board Verification (min 45% Open / 40% Reserved)" },
+    { id: "scorecard_12th", label: "12th Standard PCM / Qualifying Diploma Scorecard" },
+    { id: "entrance_exam", label: "Entrance Exam Scorecard Verification (MGMU-CET / MHT-CET / JEE)" },
+    { id: "category_domicile", label: "Domicile / Nationality / Category Certificate (if applicable)" },
+    { id: "photo_id", label: "Photo Identity & Proof of Date of Birth (Aadhaar / Passport)" }
+  ];
+
+  const toggleChecklistItem = (appKey, itemKey) => {
+    setAppChecklists((prev) => {
+      const current = prev[appKey] || {};
+      const updated = {
+        ...prev,
+        [appKey]: {
+          ...current,
+          [itemKey]: !current[itemKey]
+        }
+      };
+      try {
+        localStorage.setItem("iict_app_checklists", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const isLeadOverdue = (lead) => {
+    if (!lead) return false;
+    const isNew = !lead.status || lead.status === "new";
+    if (!isNew) return false;
+    if (!lead.created_at) return false;
+    const ageMs = Date.now() - new Date(lead.created_at).getTime();
+    return ageMs > 48 * 60 * 60 * 1000;
+  };
+
+  const handleUpdateStaffRole = async (staff, newRole) => {
+    if (!staff || staff.role === "super_admin" || staff.email === "dp844771@gmail.com") return;
+    const staffKey = staff.user_id || staff.email;
+    setUpdatingStaffRoleId(staffKey);
+    setStaffActionBanner(null);
+
+    try {
+      if (supabase) {
+        if (staff.user_id) {
+          await supabase.from("staff_profiles").update({ role: newRole }).eq("user_id", staff.user_id);
+        } else if (staff.email) {
+          await supabase.from("staff_profiles").update({ role: newRole }).eq("email", staff.email);
+        }
+      }
+
+      if (session?.access_token) {
+        await fetch("/api/grant-staff", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({
+            email: staff.email,
+            displayName: staff.display_name,
+            role: newRole,
+            department: staff.department || "IICT Faculty"
+          })
+        });
+      }
+
+      setStaffList((prev) =>
+        prev.map((s) => (s.email === staff.email ? { ...s, role: newRole } : s))
+      );
+
+      setStaffActionBanner({
+        type: "success",
+        message: `Successfully updated role for ${staff.display_name} to ${newRole === "teacher" ? "Faculty Teacher" : newRole === "counsellor" ? "Admissions Counsellor" : "Admissions Admin"}.`
+      });
+      setTimeout(() => setStaffActionBanner(null), 5000);
+    } catch (err) {
+      setStaffActionBanner({
+        type: "error",
+        message: `Failed to update staff role: ${err.message}`
+      });
+    } finally {
+      setUpdatingStaffRoleId(null);
+    }
+  };
+
+  const copyStaffCredentials = (staffCreds) => {
+    if (!staffCreds) return;
+    const portalUrl = typeof window !== "undefined" ? `${window.location.origin}/staff` : "https://admissions.iict.mgmu.ac.in/staff";
+    const text = `MGM University IICT Admissions Portal - Authorized Staff Onboarding
+
+Dear ${staffCreds.name},
+
+You have been granted official staff access to the MGM University IICT Admissions Portal.
+
+Login Credentials:
+Portal URL: ${portalUrl}
+Registered Email: ${staffCreds.email}
+Assigned Role: ${staffCreds.role}
+Department: ${staffCreds.department}
+Initial Password: ${staffCreds.password}
+
+Please sign in at ${portalUrl} to review direct applications, verify student records, update scrutiny notes, and communicate with prospective applicants.`;
+
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedCredentials(true);
+      setTimeout(() => setCopiedCredentials(false), 2500);
+    } catch {}
+  };
+
+  const handleKpiCardClick = (statusKey) => {
+    if (appStatusFilter === statusKey && statusKey !== "all") {
+      setAppStatusFilter("all");
+    } else {
+      setAppStatusFilter(statusKey);
+    }
+  };
+
   const sendInquiryReply = async (inquiryId, retryLast = false) => {
     const replyText = inquiryRepliesDraft[inquiryId] || "";
     if (!retryLast && (!replyText || replyText.trim().length < 2)) {
@@ -607,6 +798,17 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
         if (!rpcErr && rpcRes) {
           setGrantMsg(rpcRes.message || "Staff access granted successfully!");
+          setLastGrantedStaff({
+            name: cleanName,
+            email: cleanEmail,
+            role: newTeacherRole,
+            department: newTeacherDept,
+            password: newTeacherPassword || "MGMU@2026"
+          });
+          setStaffActionBanner({
+            type: "success",
+            message: `Staff access successfully granted to ${cleanName} (${cleanEmail}). Role: ${newTeacherRole}.`
+          });
           const { data: refreshed } = await supabase
             .from("staff_profiles")
             .select("*")
@@ -652,6 +854,17 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
       if (apiResponse.ok && resJson?.success) {
         setGrantMsg(resJson.message || "Staff access granted successfully!");
+        setLastGrantedStaff({
+          name: cleanName,
+          email: cleanEmail,
+          role: newTeacherRole,
+          department: newTeacherDept,
+          password: newTeacherPassword || "MGMU@2026"
+        });
+        setStaffActionBanner({
+          type: "success",
+          message: `Staff access successfully granted to ${cleanName} (${cleanEmail}). Role: ${newTeacherRole}.`
+        });
         const { data: refreshed } = await supabase
           .from("staff_profiles")
           .select("*")
@@ -667,6 +880,7 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
       if (resJson?.error) {
         setGrantMsg(`Notice: ${resJson.error}`);
+        setStaffActionBanner({ type: "error", message: resJson.error });
         setGranting(false);
         return;
       }
@@ -689,6 +903,11 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
         await supabase.from("staff_profiles").delete().eq("email", emailToRevoke);
         setStaffList((prev) => prev.filter((s) => s.email !== emailToRevoke));
       }
+      setStaffActionBanner({
+        type: "success",
+        message: `Staff access for ${emailToRevoke} was successfully revoked.`
+      });
+      setTimeout(() => setStaffActionBanner(null), 5000);
     } catch {
       // ignore
     } finally {
@@ -700,9 +919,10 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
   const totalAppsCount = applications.length;
   const submittedAppsCount = applications.filter((a) => !a.status || a.status === "submitted").length;
   const scrutinyAppsCount = applications.filter((a) => a.status === "under_scrutiny").length;
-  const verifiedAppsCount = applications.filter(
-    (a) => a.status === "documents_verified" || a.status === "merit_listed" || a.status === "provisionally_approved"
-  ).length;
+  const docsVerifiedAppsCount = applications.filter((a) => a.status === "documents_verified").length;
+  const meritListedAppsCount = applications.filter((a) => a.status === "merit_listed").length;
+  const approvedAppsCount = applications.filter((a) => a.status === "provisionally_approved").length;
+  const verifiedAppsCount = docsVerifiedAppsCount + meritListedAppsCount + approvedAppsCount;
 
   const distinctAppPrograms = Array.from(
     new Set(applications.map((a) => a.program_choice).filter(Boolean))
@@ -727,6 +947,10 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
   const totalLeadsCount = leads.length;
   const newLeadsCount = leads.filter((l) => !l.status || l.status === "new").length;
   const qualifiedLeadsCount = leads.filter((l) => l.status === "qualified").length;
+  const contactedLeadsCount = leads.filter((l) => l.status === "contacted").length;
+  const overdueLeadsCount = leads.filter(isLeadOverdue).length;
+  const unassignedLeadsCount = leads.filter((l) => !l.assigned_to).length;
+  const assignedToMeCount = leads.filter((l) => l.assigned_to === session?.user?.id).length;
 
   const pcmScores = leads
     .map((l) => parseFloat(l.marks_12th))
@@ -779,6 +1003,13 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
   };
 
   const filteredLeads = leads.filter((lead) => {
+    // Quick Filter Tabs (All, Unassigned, Assigned to Me, Overdue, Contacted, Qualified)
+    if (quickInquiryFilter === "unassigned" && lead.assigned_to) return false;
+    if (quickInquiryFilter === "assigned_me" && lead.assigned_to !== session?.user?.id) return false;
+    if (quickInquiryFilter === "overdue" && !isLeadOverdue(lead)) return false;
+    if (quickInquiryFilter === "contacted" && lead.status !== "contacted") return false;
+    if (quickInquiryFilter === "qualified" && lead.status !== "qualified") return false;
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       const qClean = q.replace(/[^a-z0-9]/gi, "");
@@ -1096,9 +1327,23 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
       {/* TAB 0: Direct Applications */}
       {activeTab === "applications" && (
         <div>
-          {/* KPI Analytics for Applications */}
+          {/* Clickable KPI Analytics for Applications (Every Status Represented) */}
           <section className="admin-kpi-grid">
-            <div className="admin-kpi-card">
+            <div
+              className={`admin-kpi-card clickable ${appStatusFilter === "all" ? "active-kpi" : ""}`}
+              onClick={() => handleKpiCardClick("all")}
+              role="button"
+              tabIndex={0}
+              aria-pressed={appStatusFilter === "all"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleKpiCardClick("all");
+                }
+              }}
+              title="Click to view all direct submissions"
+            >
+              {appStatusFilter === "all" && <span className="kpi-active-pill"><Check size={10} /> Active</span>}
               <div className="kpi-icon-wrap kpi-icon-blue">
                 <FileText size={22} />
               </div>
@@ -1109,7 +1354,21 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
               </div>
             </div>
 
-            <div className="admin-kpi-card">
+            <div
+              className={`admin-kpi-card clickable ${appStatusFilter === "submitted" ? "active-kpi" : ""}`}
+              onClick={() => handleKpiCardClick("submitted")}
+              role="button"
+              tabIndex={0}
+              aria-pressed={appStatusFilter === "submitted"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleKpiCardClick("submitted");
+                }
+              }}
+              title="Click to filter new submissions awaiting scrutiny"
+            >
+              {appStatusFilter === "submitted" && <span className="kpi-active-pill"><Check size={10} /> Active</span>}
               <div className="kpi-icon-wrap kpi-icon-amber">
                 <Clock size={22} />
               </div>
@@ -1120,7 +1379,21 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
               </div>
             </div>
 
-            <div className="admin-kpi-card">
+            <div
+              className={`admin-kpi-card clickable ${appStatusFilter === "under_scrutiny" ? "active-kpi" : ""}`}
+              onClick={() => handleKpiCardClick("under_scrutiny")}
+              role="button"
+              tabIndex={0}
+              aria-pressed={appStatusFilter === "under_scrutiny"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleKpiCardClick("under_scrutiny");
+                }
+              }}
+              title="Click to filter applications under committee scrutiny"
+            >
+              {appStatusFilter === "under_scrutiny" && <span className="kpi-active-pill"><Check size={10} /> Active</span>}
               <div className="kpi-icon-wrap kpi-icon-purple">
                 <TrendingUp size={22} />
               </div>
@@ -1131,14 +1404,78 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
               </div>
             </div>
 
-            <div className="admin-kpi-card">
+            <div
+              className={`admin-kpi-card clickable ${appStatusFilter === "documents_verified" ? "active-kpi" : ""}`}
+              onClick={() => handleKpiCardClick("documents_verified")}
+              role="button"
+              tabIndex={0}
+              aria-pressed={appStatusFilter === "documents_verified"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleKpiCardClick("documents_verified");
+                }
+              }}
+              title="Click to filter applications with verified documents"
+            >
+              {appStatusFilter === "documents_verified" && <span className="kpi-active-pill"><Check size={10} /> Active</span>}
               <div className="kpi-icon-wrap kpi-icon-green">
                 <CheckCircle2 size={22} />
               </div>
               <div className="kpi-content">
-                <span className="kpi-val">{verifiedAppsCount}</span>
-                <span className="kpi-lbl">Verified / Approved</span>
-                <span className="kpi-sub">Eligible for admission offer</span>
+                <span className="kpi-val">{docsVerifiedAppsCount}</span>
+                <span className="kpi-lbl">Docs Verified</span>
+                <span className="kpi-sub">Certificates verified</span>
+              </div>
+            </div>
+
+            <div
+              className={`admin-kpi-card clickable ${appStatusFilter === "merit_listed" ? "active-kpi" : ""}`}
+              onClick={() => handleKpiCardClick("merit_listed")}
+              role="button"
+              tabIndex={0}
+              aria-pressed={appStatusFilter === "merit_listed"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleKpiCardClick("merit_listed");
+                }
+              }}
+              title="Click to filter merit-listed candidates"
+            >
+              {appStatusFilter === "merit_listed" && <span className="kpi-active-pill"><Check size={10} /> Active</span>}
+              <div className="kpi-icon-wrap kpi-icon-teal">
+                <Award size={22} />
+              </div>
+              <div className="kpi-content">
+                <span className="kpi-val">{meritListedAppsCount}</span>
+                <span className="kpi-lbl">Merit Listed</span>
+                <span className="kpi-sub">Merit ranking qualified</span>
+              </div>
+            </div>
+
+            <div
+              className={`admin-kpi-card clickable ${appStatusFilter === "provisionally_approved" ? "active-kpi" : ""}`}
+              onClick={() => handleKpiCardClick("provisionally_approved")}
+              role="button"
+              tabIndex={0}
+              aria-pressed={appStatusFilter === "provisionally_approved"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleKpiCardClick("provisionally_approved");
+                }
+              }}
+              title="Click to filter provisionally approved admissions"
+            >
+              {appStatusFilter === "provisionally_approved" && <span className="kpi-active-pill"><Check size={10} /> Active</span>}
+              <div className="kpi-icon-wrap kpi-icon-green">
+                <ShieldCheck size={22} />
+              </div>
+              <div className="kpi-content">
+                <span className="kpi-val">{approvedAppsCount}</span>
+                <span className="kpi-lbl">Approved</span>
+                <span className="kpi-sub">Seat offer dispatched</span>
               </div>
             </div>
           </section>
@@ -1178,9 +1515,9 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                 <option value="all">All Application Statuses ({totalAppsCount})</option>
                 <option value="submitted">New / Submitted ({submittedAppsCount})</option>
                 <option value="under_scrutiny">Under Committee Scrutiny ({scrutinyAppsCount})</option>
-                <option value="documents_verified">Documents Verified</option>
-                <option value="merit_listed">Merit Listed</option>
-                <option value="provisionally_approved">Provisionally Approved</option>
+                <option value="documents_verified">Documents Verified ({docsVerifiedAppsCount})</option>
+                <option value="merit_listed">Merit Listed ({meritListedAppsCount})</option>
+                <option value="provisionally_approved">Provisionally Approved ({approvedAppsCount})</option>
               </select>
             </div>
 
@@ -1250,7 +1587,7 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                       <th>Academic Marks</th>
                       <th>Entrance Exam</th>
                       <th>Review Status</th>
-                      <th>Actions</th>
+                      <th>Actions &amp; Workflow</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1258,6 +1595,7 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                       const appKey = app.id || app.application_number;
                       const isUpdating = updatingAppId === appKey;
                       const currentStatus = app.status || "submitted";
+                      const assignedFaculty = staffList.find((s) => s.user_id === app.assigned_to);
 
                       return (
                         <tr key={appKey}>
@@ -1309,12 +1647,69 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
                           <td>
                             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                              <span className={`status-select-badge ${currentStatus}`}>
+                                {currentStatus === "submitted"
+                                  ? "New / Submitted"
+                                  : currentStatus === "under_scrutiny"
+                                  ? "Under Committee Scrutiny"
+                                  : currentStatus === "documents_verified"
+                                  ? "Documents Verified"
+                                  : currentStatus === "merit_listed"
+                                  ? "Merit Listed"
+                                  : currentStatus === "provisionally_approved"
+                                  ? "Provisionally Approved"
+                                  : currentStatus}
+                              </span>
+
+                              {assignedFaculty && (
+                                <div style={{ fontSize: "11px", color: "#0369a1", display: "flex", alignItems: "center", gap: "4px" }}>
+                                  <UserCheck size={11} /> {assignedFaculty.display_name}
+                                </div>
+                              )}
+
+                              {renderNotificationStatusBadge(app)}
+                            </div>
+                          </td>
+
+                          <td>
+                            <div className="app-actions-column">
+                              {/* 1. View Profile Button */}
+                              <button
+                                type="button"
+                                className="secondary-button app-action-btn view"
+                                onClick={() => setSelectedAppModal(app)}
+                                title="View complete candidate dossier & document verification checklist"
+                              >
+                                <Eye size={12} /> View Profile
+                              </button>
+
+                              {/* 2. Assign Reviewer Dropdown */}
+                              <div className="app-assign-reviewer-wrap">
+                                <UserCheck size={12} color="#0f766e" />
+                                <select
+                                  value={app.assigned_to || ""}
+                                  onChange={(e) => updateAppAssignment(app, e.target.value)}
+                                  className="app-assign-select"
+                                  title="Assign Faculty Reviewer"
+                                  aria-label="Assign Faculty Reviewer"
+                                >
+                                  <option value="">-- Assign Reviewer --</option>
+                                  {staffList.map((st) => (
+                                    <option key={st.user_id} value={st.user_id}>
+                                      {st.display_name} {st.user_id === session?.user?.id ? "(You)" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* 3. Change Status Dropdown */}
                               <select
                                 value={currentStatus}
                                 disabled={isUpdating}
                                 onChange={(e) => updateApplicationStatus(app, e.target.value)}
                                 className={`status-select-badge ${currentStatus}`}
-                                style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11.5px", fontWeight: 600 }}
+                                style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11px", fontWeight: 600, width: "100%" }}
+                                title="Change application scrutiny status"
                               >
                                 <option value="submitted">New / Submitted</option>
                                 <option value="under_scrutiny">Under Committee Scrutiny</option>
@@ -1323,20 +1718,42 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                                 <option value="provisionally_approved">Provisionally Approved</option>
                               </select>
 
-                              {renderNotificationStatusBadge(app)}
-                            </div>
-                          </td>
+                              {/* 4. Quick Inline Note & Save */}
+                              <div className="app-inline-note-wrap">
+                                <input
+                                  type="text"
+                                  placeholder="Quick scrutiny note..."
+                                  value={appNotesDraft[appKey] !== undefined ? appNotesDraft[appKey] : (app.scrutiny_notes || "")}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setAppNotesDraft((prev) => ({ ...prev, [appKey]: val }));
+                                  }}
+                                  className="app-inline-note-input"
+                                />
+                                <button
+                                  type="button"
+                                  className="app-inline-note-save"
+                                  disabled={savingAppNotesId === appKey}
+                                  onClick={() => saveAppScrutinyNote(app)}
+                                  title="Save Scrutiny Note"
+                                >
+                                  <Save size={11} /> {savingAppNotesId === appKey ? "..." : "Save"}
+                                </button>
+                              </div>
 
-                          <td>
-                            <button
-                              type="button"
-                              className="secondary-button"
-                              onClick={() => setSelectedAppModal(app)}
-                              style={{ padding: "6px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px" }}
-                              title="View complete application profile"
-                            >
-                              <Eye size={13} /> View Profile
-                            </button>
+                              {/* 5. Retry / Send Email Notification Button */}
+                              <div className="app-email-action-wrap">
+                                <button
+                                  type="button"
+                                  className="app-email-action-btn"
+                                  disabled={retryingEmailAppId === appKey}
+                                  onClick={() => updateApplicationStatus(app, currentStatus, undefined, true)}
+                                  title={`Send or retry status notification email to ${app.email}`}
+                                >
+                                  <Mail size={12} /> {retryingEmailAppId === appKey ? "Sending..." : "Send Email"}
+                                </button>
+                              </div>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1414,6 +1831,58 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
           {/* Admin Toolbar */}
           <div className="admin-toolbar-card">
+            {/* Quick Filter Status & Assignment Tabs */}
+            <div className="inquiry-quick-filter-pills" role="tablist" aria-label="Inquiry quick filter categories">
+              <button
+                type="button"
+                className={`inquiry-pill-btn ${quickInquiryFilter === "all" ? "active" : ""}`}
+                onClick={() => setQuickInquiryFilter("all")}
+              >
+                All Inquiries <span className="pill-count">{totalLeadsCount}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`inquiry-pill-btn ${quickInquiryFilter === "unassigned" ? "active" : ""}`}
+                onClick={() => setQuickInquiryFilter("unassigned")}
+              >
+                <UserCheck size={12} /> Unassigned <span className="pill-count">{unassignedLeadsCount}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`inquiry-pill-btn ${quickInquiryFilter === "assigned_me" ? "active" : ""}`}
+                onClick={() => setQuickInquiryFilter("assigned_me")}
+              >
+                Assigned to Me <span className="pill-count">{assignedToMeCount}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`inquiry-pill-btn overdue ${quickInquiryFilter === "overdue" ? "active" : ""}`}
+                onClick={() => setQuickInquiryFilter("overdue")}
+                title="Inquiries older than 48 hours still in new status"
+              >
+                <AlertTriangle size={12} /> Overdue (&gt;48h) <span className="pill-count">{overdueLeadsCount}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`inquiry-pill-btn ${quickInquiryFilter === "contacted" ? "active" : ""}`}
+                onClick={() => setQuickInquiryFilter("contacted")}
+              >
+                Contacted <span className="pill-count">{contactedLeadsCount}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`inquiry-pill-btn ${quickInquiryFilter === "qualified" ? "active" : ""}`}
+                onClick={() => setQuickInquiryFilter("qualified")}
+              >
+                Qualified <span className="pill-count">{qualifiedLeadsCount}</span>
+              </button>
+            </div>
+
             <div className="admin-toolbar-row">
               <div className="admin-search-box">
                 <Search size={16} />
@@ -1522,11 +1991,12 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                   <option value="unassigned">Unassigned Inquiries</option>
                 </select>
 
-                {(searchQuery || statusFilter !== "all" || programFilter !== "all" || scoreFilter !== "all" || assignedFilter !== "all") && (
+                {(searchQuery || quickInquiryFilter !== "all" || statusFilter !== "all" || programFilter !== "all" || scoreFilter !== "all" || assignedFilter !== "all") && (
                   <button
                     type="button"
                     onClick={() => {
                       setSearchQuery("");
+                      setQuickInquiryFilter("all");
                       setStatusFilter("all");
                       setProgramFilter("all");
                       setScoreFilter("all");
@@ -1571,6 +2041,7 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                     className="secondary-button"
                     onClick={() => {
                       setSearchQuery("");
+                      setQuickInquiryFilter("all");
                       setStatusFilter("all");
                       setProgramFilter("all");
                       setScoreFilter("all");
@@ -1591,6 +2062,7 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                         <th>Program of Interest</th>
                         <th>Academic Scores</th>
                         <th>Entrance Exam</th>
+                        <th>Assigned Faculty</th>
                         <th>Review Status</th>
                         <th>Actions</th>
                       </tr>
@@ -1599,6 +2071,7 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                       {filteredLeads.map((lead) => {
                         const refCode = lead.reference_code || `IICT-2026-${(lead.id || "").replace(/-/g, "").slice(0, 6).toUpperCase() || "NEW"}`;
                         const cleanPhone = (lead.phone || "").replace(/\D/g, "");
+                        const isOverdue = isLeadOverdue(lead);
 
                         return (
                           <tr key={lead.id}>
@@ -1622,7 +2095,14 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                             </td>
 
                             <td>
-                              <strong>{lead.student_name}</strong>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                <strong>{lead.student_name}</strong>
+                                {isOverdue && (
+                                  <span className="overdue-pill" title="Uncontacted for more than 48 hours">
+                                    <AlertTriangle size={11} /> Overdue (&gt;48h)
+                                  </span>
+                                )}
+                              </div>
                               <div style={{ fontSize: "11px", color: "#001E32", marginTop: "2px" }}>
                                 <a href={`tel:${cleanPhone}`} style={{ color: "inherit", textDecoration: "none" }}>
                                   {lead.phone ? `+91 ${lead.phone}` : "—"}
@@ -1661,6 +2141,23 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                               <div style={{ fontSize: "11px", color: "#64748B" }}>
                                 {lead.entrance_score ? `Score: ${lead.entrance_score}` : "Score pending"}
                               </div>
+                            </td>
+
+                            <td>
+                              <select
+                                className="table-assign-select"
+                                value={lead.assigned_to || ""}
+                                onChange={(e) => updateLeadAssignment(lead.id, e.target.value)}
+                                title="Assign Faculty Counsellor"
+                                aria-label="Assign Faculty Counsellor"
+                              >
+                                <option value="">-- Unassigned --</option>
+                                {staffList.map((st) => (
+                                  <option key={st.user_id} value={st.user_id}>
+                                    {st.display_name} {st.user_id === session?.user?.id ? "(You)" : ""}
+                                  </option>
+                                ))}
+                              </select>
                             </td>
 
                             <td>
@@ -1732,6 +2229,11 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                         <div className="lead-student-meta">
                           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                             <strong>{lead.student_name}</strong>
+                            {isLeadOverdue(lead) && (
+                              <span className="overdue-pill" title="Uncontacted for more than 48 hours">
+                                <AlertTriangle size={11} /> Overdue (&gt;48h)
+                              </span>
+                            )}
                             {isAssignedToMe && (
                               <span style={{ fontSize: "11px", background: "#dbeafe", color: "#1e40af", fontWeight: 700, padding: "2px 8px", borderRadius: "4px" }}>
                                 Assigned to You
@@ -2078,142 +2580,238 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
       {/* TAB 2: Staff Access Management (Super Admin Exclusive) */}
       {activeTab === "teachers" && userRole === "super_admin" && (
-        <div className="teacher-management-grid">
-          <div className="grant-teacher-card">
-            <h3>Grant Staff &amp; Faculty Access</h3>
-            <p>
-              As Super Admin, you can authorize faculty teachers and counsellors to review applicant inquiries, track lead status, update notes, and conduct admissions guidance.
-            </p>
-            <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", color: "#166534", margin: "10px 0", display: "inline-flex", alignItems: "center", gap: "6px" }}>
-              <CheckCircle2 size={13} /> Secure Staff Service Role Active &middot; Super Admin Verified
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          {staffActionBanner && (
+            <div className={`staff-alert-banner ${staffActionBanner.type}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {staffActionBanner.type === "success" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                <span>{staffActionBanner.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStaffActionBanner(null)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: 0 }}
+                aria-label="Dismiss banner"
+              >
+                <X size={15} />
+              </button>
             </div>
-            <form onSubmit={handleGrantTeacher} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
-                Staff / Teacher Email
-                <input
-                  type="email"
-                  value={newTeacherEmail}
-                  onChange={(e) => setNewTeacherEmail(e.target.value)}
-                  placeholder="teacher@mgmu.ac.in"
-                  required
-                  style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
-                />
-              </label>
+          )}
 
-              <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
-                Faculty Display Name
-                <input
-                  type="text"
-                  value={newTeacherName}
-                  onChange={(e) => setNewTeacherName(e.target.value)}
-                  placeholder="Prof. / Dr. Name"
-                  required
-                  style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
-                />
-              </label>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+          <div className="teacher-management-grid">
+            <div className="grant-teacher-card">
+              <h3>Grant Staff &amp; Faculty Access</h3>
+              <p>
+                As Super Admin, you can authorize faculty teachers and counsellors to review applicant inquiries, track lead status, update notes, and conduct admissions guidance.
+              </p>
+              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", color: "#166534", margin: "10px 0", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                <CheckCircle2 size={13} /> Secure Staff Service Role Active &middot; Super Admin Verified
+              </div>
+              <form onSubmit={handleGrantTeacher} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
-                  Assigned Role
-                  <select
-                    value={newTeacherRole}
-                    onChange={(e) => setNewTeacherRole(e.target.value)}
-                    style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px", background: "#fff" }}
-                  >
-                    <option value="teacher">Teacher / Faculty</option>
-                    <option value="counsellor">Admissions Counsellor</option>
-                    <option value="admin">Admissions Admin</option>
-                  </select>
-                </label>
-
-                <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
-                  Department / Unit
+                  Staff / Teacher Email
                   <input
-                    type="text"
-                    value={newTeacherDept}
-                    onChange={(e) => setNewTeacherDept(e.target.value)}
-                    placeholder="IICT Faculty"
+                    type="email"
+                    value={newTeacherEmail}
+                    onChange={(e) => setNewTeacherEmail(e.target.value)}
+                    placeholder="teacher@mgmu.ac.in"
+                    required
                     style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
                   />
                 </label>
+
+                <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
+                  Faculty Display Name
+                  <input
+                    type="text"
+                    value={newTeacherName}
+                    onChange={(e) => setNewTeacherName(e.target.value)}
+                    placeholder="Prof. / Dr. Name"
+                    required
+                    style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
+                  />
+                </label>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                  <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
+                    Assigned Role
+                    <select
+                      value={newTeacherRole}
+                      onChange={(e) => setNewTeacherRole(e.target.value)}
+                      style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px", background: "#fff" }}
+                    >
+                      <option value="teacher">Teacher / Faculty</option>
+                      <option value="counsellor">Admissions Counsellor</option>
+                      <option value="admin">Admissions Admin</option>
+                    </select>
+                  </label>
+
+                  <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
+                    Department / Unit
+                    <input
+                      type="text"
+                      value={newTeacherDept}
+                      onChange={(e) => setNewTeacherDept(e.target.value)}
+                      placeholder="IICT Faculty"
+                      style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
+                    />
+                  </label>
+                </div>
+
+                <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
+                  Initial Login Password
+                  <input
+                    type="text"
+                    value={newTeacherPassword}
+                    onChange={(e) => setNewTeacherPassword(e.target.value)}
+                    placeholder="MGMU@2026"
+                    required
+                    style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
+                  />
+                  <span style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px", display: "block" }}>
+                    Staff can sign in immediately at <code>/staff</code> with this password. Directly active &middot; No pending status.
+                  </span>
+                </label>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={granting}
+                  style={{ marginTop: "8px", justifyContent: "center" }}
+                >
+                  <UserPlus size={15} />{" "}
+                  {granting ? "Granting..." : "Grant Staff Access"}
+                </button>
+                {grantMsg && (
+                  <div style={{ padding: "8px 12px", borderRadius: "6px", background: grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#ecfdf5" : "#fff7ed", border: "1px solid " + (grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#a7f3d0" : "#fed7aa"), color: grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#065f46" : "#9a3412", fontSize: "12px", fontWeight: 600 }}>
+                    {grantMsg}
+                  </div>
+                )}
+              </form>
+            </div>
+
+            <div className="teacher-table-card">
+              <div className="teacher-table-header">
+                <strong>Authorized Faculty &amp; Staff ({staffList.length})</strong>
+                <small style={{ color: "#6b7280" }}>Super Admin Managed</small>
               </div>
-
-              <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#374151" }}>
-                Initial Login Password
-                <input
-                  type="text"
-                  value={newTeacherPassword}
-                  onChange={(e) => setNewTeacherPassword(e.target.value)}
-                  placeholder="MGMU@2026"
-                  required
-                  style={{ width: "100%", marginTop: "4px", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: "6px" }}
-                />
-                <span style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px", display: "block" }}>
-                  Staff can sign in immediately at <code>/staff</code> with this password. Directly active &middot; No pending status.
-                </span>
-              </label>
-
-              <button
-                type="submit"
-                className="primary-button"
-                disabled={granting}
-                style={{ marginTop: "8px", justifyContent: "center" }}
-              >
-                <UserPlus size={15} />{" "}
-                {granting ? "Granting..." : "Grant Staff Access"}
-              </button>
-              {grantMsg && (
-                <div style={{ padding: "8px 12px", borderRadius: "6px", background: grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#ecfdf5" : "#fff7ed", border: "1px solid " + (grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#a7f3d0" : "#fed7aa"), color: grantMsg.includes("granted") || grantMsg.includes("recorded") || grantMsg.includes("active") ? "#065f46" : "#9a3412", fontSize: "12px", fontWeight: 600 }}>
-                  {grantMsg}
+              {staffList.length > 0 ? (
+                staffList.map((staff) => (
+                  <div key={staff.user_id || staff.email} className="teacher-list-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div className="teacher-meta-col">
+                      <strong>{staff.display_name}</strong>
+                      <small>{staff.email || "Faculty member"} · {staff.department || "IICT"}</small>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      {staff.role === "super_admin" || staff.email === "dp844771@gmail.com" ? (
+                        <span className="super-admin-badge">{staff.role}</span>
+                      ) : (
+                        <select
+                          className="staff-role-select"
+                          value={staff.role || "teacher"}
+                          disabled={updatingStaffRoleId === (staff.user_id || staff.email)}
+                          onChange={(e) => handleUpdateStaffRole(staff, e.target.value)}
+                          title="Edit staff authorization role"
+                        >
+                          <option value="teacher">Teacher / Faculty</option>
+                          <option value="counsellor">Admissions Counsellor</option>
+                          <option value="admin">Admissions Admin</option>
+                        </select>
+                      )}
+                      {staff.role !== "super_admin" && staff.email !== "dp844771@gmail.com" && (
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeStaff(staff.email)}
+                          disabled={revokingEmail === staff.email}
+                          style={{
+                            background: "#fee2e2",
+                            border: "1px solid #fca5a5",
+                            color: "#991b1b",
+                            padding: "4px 8px",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            cursor: "pointer"
+                          }}
+                        >
+                          {revokingEmail === staff.email ? "..." : "Revoke"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: "30px", textAlign: "center", color: "#6b7280", fontSize: "13px" }}>
+                  No staff members configured yet. Use the form to grant access to teachers.
                 </div>
               )}
-            </form>
+            </div>
           </div>
 
-          <div className="teacher-table-card">
-            <div className="teacher-table-header">
-              <strong>Authorized Faculty &amp; Staff ({staffList.length})</strong>
-              <small style={{ color: "#6b7280" }}>Super Admin Managed</small>
-            </div>
-            {staffList.length > 0 ? (
-              staffList.map((staff) => (
-                <div key={staff.user_id || staff.email} className="teacher-list-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div className="teacher-meta-col">
-                    <strong>{staff.display_name}</strong>
-                    <small>{staff.email || "Faculty member"} · {staff.department || "IICT"}</small>
+          {/* Onboarding Credentials Modal */}
+          {lastGrantedStaff && (
+            <div className="staff-credentials-modal-overlay" onClick={() => setLastGrantedStaff(null)}>
+              <div className="staff-credentials-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="staff-credentials-header">
+                  <div>
+                    <span className="eyebrow" style={{ margin: 0 }}>STAFF ACCESS ACTIVATED</span>
+                    <h3 style={{ margin: "4px 0 0", color: "#001E32" }}>{lastGrantedStaff.name}</h3>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span className={staff.role === "super_admin" ? "super-admin-badge" : "teacher-badge"}>
-                      {staff.role}
-                    </span>
-                    {staff.role !== "super_admin" && staff.email !== "dp844771@gmail.com" && (
-                      <button
-                        type="button"
-                        onClick={() => handleRevokeStaff(staff.email)}
-                        disabled={revokingEmail === staff.email}
-                        style={{
-                          background: "#fee2e2",
-                          border: "1px solid #fca5a5",
-                          color: "#991b1b",
-                          padding: "4px 8px",
-                          borderRadius: "4px",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                          cursor: "pointer"
-                        }}
-                      >
-                        {revokingEmail === staff.email ? "..." : "Revoke"}
-                      </button>
-                    )}
+                  <button
+                    type="button"
+                    onClick={() => setLastGrantedStaff(null)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280" }}
+                    aria-label="Close"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <p style={{ fontSize: "12.5px", color: "#475569", margin: "0 0 12px" }}>
+                  Staff member credentials generated and activated. Securely transmit these onboarding details to the faculty member or counsellor:
+                </p>
+                <div className="credentials-box">
+                  <div className="cred-row">
+                    <span className="cred-label">Portal Sign-in URL</span>
+                    <span className="cred-val">{typeof window !== "undefined" ? `${window.location.origin}/staff` : "https://admissions.iict.mgmu.ac.in/staff"}</span>
+                  </div>
+                  <div className="cred-row">
+                    <span className="cred-label">Registered Email</span>
+                    <span className="cred-val">{lastGrantedStaff.email}</span>
+                  </div>
+                  <div className="cred-row">
+                    <span className="cred-label">Assigned Role</span>
+                    <span className="cred-val" style={{ textTransform: "capitalize" }}>{lastGrantedStaff.role}</span>
+                  </div>
+                  <div className="cred-row">
+                    <span className="cred-label">Department</span>
+                    <span className="cred-val">{lastGrantedStaff.department || "IICT Faculty"}</span>
+                  </div>
+                  <div className="cred-row">
+                    <span className="cred-label">Initial Password</span>
+                    <span className="cred-val" style={{ color: "#C05A21" }}>{lastGrantedStaff.password}</span>
                   </div>
                 </div>
-              ))
-            ) : (
-              <div style={{ padding: "30px", textAlign: "center", color: "#6b7280", fontSize: "13px" }}>
-                No staff members configured yet. Use the form to grant access to teachers.
+                <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "16px" }}>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setLastGrantedStaff(null)}
+                    style={{ fontSize: "12px", padding: "6px 14px" }}
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => copyStaffCredentials(lastGrantedStaff)}
+                    style={{ fontSize: "12px", padding: "6px 14px" }}
+                  >
+                    <Copy size={14} /> {copiedCredentials ? "Copied to Clipboard!" : "Copy Full Onboarding Info"}
+                  </button>
+                </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2334,20 +2932,166 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                 </div>
               </div>
 
+              {/* Document & Eligibility Verification Checklist */}
+              {(() => {
+                const modalAppKey = selectedAppModal.id || selectedAppModal.application_number;
+                const checklist = appChecklists[modalAppKey] || {};
+                const verifiedCount = VERIFICATION_CHECKLIST_ITEMS.filter((item) => checklist[item.id]).length;
+                const checklistPct = Math.round((verifiedCount / VERIFICATION_CHECKLIST_ITEMS.length) * 100);
+
+                return (
+                  <div className="verification-checklist-card">
+                    <div className="verification-checklist-header">
+                      <div className="verification-checklist-title">
+                        <ListChecks size={16} color="#C05A21" />
+                        <span>Document &amp; Eligibility Verification Checklist</span>
+                      </div>
+                      <div className="verification-progress-wrap">
+                        <div className="verification-progress-bar">
+                          <div className="verification-progress-fill" style={{ width: `${checklistPct}%` }} />
+                        </div>
+                        <span className="verification-progress-text">
+                          {verifiedCount} of {VERIFICATION_CHECKLIST_ITEMS.length} Verified ({checklistPct}%)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="checklist-items-grid">
+                      {VERIFICATION_CHECKLIST_ITEMS.map((item) => {
+                        const isChecked = Boolean(checklist[item.id]);
+                        return (
+                          <div
+                            key={item.id}
+                            className={`checklist-item-row ${isChecked ? "checked" : ""}`}
+                            onClick={() => toggleChecklistItem(modalAppKey, item.id)}
+                            role="button"
+                            tabIndex={0}
+                            title="Click to toggle document verification status"
+                          >
+                            {isChecked ? (
+                              <CheckSquare size={16} color="#15803D" style={{ flexShrink: 0 }} />
+                            ) : (
+                              <Square size={16} color="#94A3B8" style={{ flexShrink: 0 }} />
+                            )}
+                            <span className="checklist-item-label">{item.label}</span>
+                            <span className={`checklist-item-status-badge ${isChecked ? "verified" : "pending"}`}>
+                              {isChecked ? "VERIFIED" : "PENDING"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Activity & Scrutiny Audit Timeline */}
+              {(() => {
+                const modalAppKey = selectedAppModal.id || selectedAppModal.application_number;
+                const feedback = appEmailFeedback[modalAppKey];
+                const notifStatus = feedback?.status || selectedAppModal.last_notification_status;
+                const assignedReviewer = staffList.find((s) => s.user_id === selectedAppModal.assigned_to);
+
+                return (
+                  <div className="audit-timeline-container">
+                    <div className="audit-timeline-title">
+                      <History size={15} color="#C05A21" />
+                      <span>Application Activity &amp; Status Timeline</span>
+                    </div>
+                    <div className="audit-timeline-list">
+                      <div className="audit-timeline-step">
+                        <strong>Application Lodged</strong>
+                        <div className="time-sub">
+                          {selectedAppModal.created_at
+                            ? new Date(selectedAppModal.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
+                            : "Direct Online Submission"} &middot; Candidate registered via MGMU Admissions Portal
+                        </div>
+                      </div>
+
+                      <div className="audit-timeline-step">
+                        <strong>Current Lifecycle Stage: <span style={{ textTransform: "uppercase", color: "#C05A21" }}>{(selectedAppModal.status || "submitted").replace(/_/g, " ")}</span></strong>
+                        <div className="time-sub">
+                          {selectedAppModal.status === "provisionally_approved"
+                            ? "Applicant provisionally approved by Admissions Directorate."
+                            : selectedAppModal.status === "merit_listed"
+                            ? "Candidate verified and placed on the provisional merit list."
+                            : selectedAppModal.status === "documents_verified"
+                            ? "Candidate eligibility and qualifying academic scorecards verified."
+                            : selectedAppModal.status === "under_scrutiny"
+                            ? "Active departmental scrutiny underway by faculty review committee."
+                            : "Application lodged and queued for faculty document scrutiny."}
+                        </div>
+                      </div>
+
+                      <div className="audit-timeline-step">
+                        <strong>Assigned Reviewer: {assignedReviewer ? `${assignedReviewer.display_name} (${assignedReviewer.role})` : (selectedAppModal.assigned_to ? `Staff #${selectedAppModal.assigned_to.slice(0, 8)}` : <span style={{ color: "#64748B" }}>Unassigned</span>)}</strong>
+                        <div className="time-sub">
+                          {selectedAppModal.assigned_to
+                            ? "Designated faculty committee reviewer for application evaluation."
+                            : "No reviewer assigned yet. Assign a faculty member below."}
+                        </div>
+                      </div>
+
+                      <div className="audit-timeline-step">
+                        <strong>Student Email Notification: {(() => {
+                          if (notifStatus === "sent" || notifStatus === "mock_sent") return <span style={{ color: "#15803D" }}>Delivered to {selectedAppModal.email}</span>;
+                          if (notifStatus === "failed") return <span style={{ color: "#DC2626" }}>Delivery Failed</span>;
+                          if (notifStatus === "not_configured") return <span style={{ color: "#D97706" }}>Server API Key Missing</span>;
+                          return <span style={{ color: "#64748B" }}>{selectedAppModal.email ? `Recipient: ${selectedAppModal.email}` : "Not logged"}</span>;
+                        })()}</strong>
+                        <div className="time-sub">
+                          {selectedAppModal.last_notification_sent_at
+                            ? `Last notification sent: ${new Date(selectedAppModal.last_notification_sent_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}`
+                            : "Automatic student confirmation sent upon registration & status updates."}
+                        </div>
+                      </div>
+
+                      {selectedAppModal.scrutiny_notes && (
+                        <div className="audit-timeline-step">
+                          <strong>Latest Scrutiny Notes</strong>
+                          <div className="time-sub" style={{ fontStyle: "italic", color: "#334155", marginTop: "4px" }}>
+                            "{selectedAppModal.scrutiny_notes}"
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Scrutiny Notes & Status Update Controls */}
               <div style={{ marginTop: "16px", background: "#FFF8F3", padding: "16px", borderRadius: "8px", border: "1px solid #FCD7BD" }}>
-                <h4 style={{ margin: "0 0 8px", color: "#8C3A0B", fontSize: "13px" }}>Committee Scrutiny Notes &amp; Actions</h4>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "10px" }}>
+                  <h4 style={{ margin: 0, color: "#8C3A0B", fontSize: "13px" }}>Committee Scrutiny Notes &amp; Actions</h4>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "11.5px", fontWeight: 600, color: "#64748B" }}>Reviewer:</label>
+                    <select
+                      className="app-assign-select"
+                      style={{ padding: "4px 8px", background: "#FFFFFF", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "11.5px" }}
+                      value={selectedAppModal.assigned_to || ""}
+                      onChange={(e) => updateAppAssignment(selectedAppModal, e.target.value)}
+                    >
+                      <option value="">-- Unassigned --</option>
+                      {staffList.map((st) => (
+                        <option key={st.user_id || st.email} value={st.user_id || ""}>
+                          {st.display_name} ({st.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <textarea
                   rows={2}
                   style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #CBD5E1", fontSize: "12.5px" }}
                   placeholder="Record verification notes (e.g., 12th marksheet verified against MSBSHSE portal, eligible for 25% merit scholarship)..."
-                  value={appNotesDraft[selectedAppModal.id || selectedAppModal.application_number] || ""}
+                  value={appNotesDraft[selectedAppModal.id || selectedAppModal.application_number] !== undefined ? appNotesDraft[selectedAppModal.id || selectedAppModal.application_number] : (selectedAppModal.scrutiny_notes || "")}
                   onChange={(e) => {
                     const key = selectedAppModal.id || selectedAppModal.application_number;
                     setAppNotesDraft((prev) => ({ ...prev, [key]: e.target.value }));
                   }}
                 />
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px", alignItems: "center" }}>
+
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "12px", alignItems: "center" }}>
                   <button
                     type="button"
                     className="primary-button"
@@ -2379,9 +3123,31 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
                     type="button"
                     className="secondary-button"
                     style={{ fontSize: "11.5px", padding: "6px 12px" }}
+                    onClick={() => updateApplicationStatus(selectedAppModal, "merit_listed")}
+                  >
+                    Merit Listed
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{ fontSize: "11.5px", padding: "6px 12px" }}
                     onClick={() => updateApplicationStatus(selectedAppModal, "provisionally_approved")}
                   >
                     Provisionally Approve
+                  </button>
+                  <button
+                    type="button"
+                    className="app-email-action-btn"
+                    style={{ padding: "6px 12px", background: "#EFF6FF", borderColor: "#BFDBFE", color: "#1D4ED8" }}
+                    disabled={retryingEmailAppId === (selectedAppModal.id || selectedAppModal.application_number)}
+                    onClick={() => {
+                      const key = selectedAppModal.id || selectedAppModal.application_number;
+                      updateApplicationStatus(selectedAppModal, selectedAppModal.status || "submitted", appNotesDraft[key], true);
+                    }}
+                    title={`Send notification email directly to candidate at ${selectedAppModal.email}`}
+                  >
+                    <Send size={13} className={retryingEmailAppId === (selectedAppModal.id || selectedAppModal.application_number) ? "spin" : ""} />
+                    {retryingEmailAppId === (selectedAppModal.id || selectedAppModal.application_number) ? "Sending Email..." : "Send Status Email to Student"}
                   </button>
                 </div>
               </div>
