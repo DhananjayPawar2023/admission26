@@ -32,10 +32,33 @@ try {
   // ignore
 }
 
+function getCachedSupabaseSession() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("sb-") && key.endsWith("-auth-token")) {
+        const val = localStorage.getItem(key);
+        if (val) {
+          const parsed = JSON.parse(val);
+          if (parsed?.access_token && parsed?.user) {
+            return parsed;
+          }
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export function App() {
+  const [session, setSession] = useState(() => getCachedSupabaseSession());
+
   const [view, setView] = useState(() => {
     const p = window.location.pathname;
-    if (p === "/staff") return "staff-login";
+    if (p === "/staff") {
+      const cached = getCachedSupabaseSession();
+      return cached ? "dashboard" : "staff-login";
+    }
     if (p === "/compare") return "compare";
     if (p === "/inquiry") return "inquiry";
     if (p === "/apply") return "apply";
@@ -71,7 +94,6 @@ export function App() {
     }
   });
 
-  const [session, setSession] = useState(null);
   const [programs, setPrograms] = useState(fallbackPrograms);
   const [facts, setFacts] = useState(fallbackFacts);
 
@@ -102,7 +124,10 @@ export function App() {
       const prog = urlParams.get("program");
       if (prog) setAppliedProgram(prog);
 
-      if (path === "/staff") setView("staff-login");
+      if (path === "/staff") {
+        const active = session || getCachedSupabaseSession();
+        setView(active ? "dashboard" : "staff-login");
+      }
       else if (path === "/compare") setView("compare");
       else if (path === "/inquiry") setView("inquiry");
       else if (path === "/apply") setView("apply");
@@ -112,7 +137,7 @@ export function App() {
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -169,6 +194,15 @@ export function App() {
     } else {
       setAppliedProgram("");
       navigateTo("apply", "/apply");
+    }
+  };
+
+  const handleOpenStaff = () => {
+    const active = session || getCachedSupabaseSession();
+    if (active) {
+      navigateTo("dashboard", "/staff");
+    } else {
+      navigateTo("staff-login", "/staff");
     }
   };
 
@@ -286,41 +320,43 @@ export function App() {
       return;
     }
 
-    // Send the receipt only after the database confirms the application was saved.
-    // Email failure must not discard a valid application submission.
-    let emailDelivery = { status: "failed", delivered: false };
-    try {
-      const emailResponse = await fetch("/api/application-confirmation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          application_number: confirmedRecord.application_number,
-          email: confirmedRecord.email,
-          phone: confirmedRecord.phone
-        })
-      });
-      const emailData = await emailResponse.json().catch(() => ({}));
-      emailDelivery = emailData.emailDelivery || emailDelivery;
-    } catch {
-      // Keep the confirmed application visible even if the email service is unavailable.
-    }
-
-    confirmedRecord = {
-      ...confirmedRecord,
-      email_delivery_status: emailDelivery.status,
-      email_delivered: Boolean(emailDelivery.delivered)
-    };
-
+    // Immediately update state and transition to success screen — DO NOT block on email network latency!
     setApplicationLead(confirmedRecord);
 
     try {
       localStorage.setItem("iict_last_application", JSON.stringify(confirmedRecord));
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     setSubmitting(false);
     navigateTo("apply-success", "/apply/success");
+
+    // Dispatch official confirmation email in background without delaying applicant UI transition
+    fetch("/api/application-confirmation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        application_number: confirmedRecord.application_number,
+        email: confirmedRecord.email,
+        phone: confirmedRecord.phone
+      })
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.emailDelivery) {
+          setApplicationLead((prev) =>
+            prev && prev.application_number === confirmedRecord.application_number
+              ? {
+                  ...prev,
+                  email_delivery_status: data.emailDelivery.status,
+                  email_delivered: Boolean(data.emailDelivery.delivered)
+                }
+              : prev
+          );
+        }
+      })
+      .catch((e) => {
+        console.warn("Background confirmation email notice:", e);
+      });
   };
 
   // Submit inquiry to existing inquiries table
@@ -414,7 +450,7 @@ export function App() {
           onStart={() => navigateTo("inquiry", "/inquiry")}
           onApply={handleApply}
           onCompare={() => navigateTo("compare", "/compare")}
-          onStaff={() => navigateTo("staff-login", "/staff")}
+          onStaff={handleOpenStaff}
           onMyInquiry={() => openTracker()}
           session={session}
         />
@@ -435,7 +471,7 @@ export function App() {
           }}
           onApply={handleApply}
           onMyInquiry={() => openTracker()}
-          onStaff={() => navigateTo("staff-login", "/staff")}
+          onStaff={handleOpenStaff}
           session={session}
         />
       )}
@@ -450,7 +486,7 @@ export function App() {
           onPrograms={() => navigateTo("compare", "/compare")}
           onInquiry={() => navigateTo("inquiry", "/inquiry")}
           onMyInquiry={() => openTracker()}
-          onStaff={() => navigateTo("staff-login", "/staff")}
+          onStaff={handleOpenStaff}
           session={session}
         />
       )}
@@ -462,7 +498,7 @@ export function App() {
           onTrack={(ref, phone) => openTracker(ref, phone, "application")}
           onInquiry={() => navigateTo("inquiry", "/inquiry")}
           onPrograms={() => navigateTo("compare", "/compare")}
-          onStaff={() => navigateTo("staff-login", "/staff")}
+          onStaff={handleOpenStaff}
           session={session}
         />
       )}
@@ -476,7 +512,7 @@ export function App() {
           onApply={handleApply}
           onPrograms={() => navigateTo("compare", "/compare")}
           onMyInquiry={() => openTracker("", "", "inquiry")}
-          onStaff={() => navigateTo("staff-login", "/staff")}
+          onStaff={handleOpenStaff}
           session={session}
         />
       )}
@@ -503,9 +539,12 @@ export function App() {
 
       {view === "dashboard" && (
         <Dashboard
-          session={session}
+          session={session || getCachedSupabaseSession()}
           onOpenTracker={openTracker}
-          onExit={() => navigateTo("home", "/")}
+          onExit={() => {
+            setSession(null);
+            navigateTo("home", "/");
+          }}
         />
       )}
 
@@ -517,7 +556,7 @@ export function App() {
             onPrograms={() => navigateTo("compare", "/compare")}
             onApply={handleApply}
             onMyInquiry={() => openTracker(lead?.reference_code || "", lead?.phone || "", "inquiry")}
-            onStaff={() => navigateTo("staff-login", "/staff")}
+            onStaff={handleOpenStaff}
             session={session}
             activeNav="inquiry"
           />

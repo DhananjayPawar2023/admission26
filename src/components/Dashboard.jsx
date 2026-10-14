@@ -79,8 +79,24 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
   const [sendingReplyId, setSendingReplyId] = useState(null);
   const [inquiryEmailFeedback, setInquiryEmailFeedback] = useState({});
   const [staffList, setStaffList] = useState([]);
-  const [userRole, setUserRole] = useState(null); // "super_admin" | "teacher" | null
-  const [isAuthorized, setIsAuthorized] = useState(null); // null = checking, true = authorized, false = not staff
+  const [userRole, setUserRole] = useState(() => {
+    const email = (session?.user?.email || "").toLowerCase().trim();
+    if (email === "dp844771@gmail.com") return "super_admin";
+    try {
+      const cached = localStorage.getItem(`iict_staff_role_${session?.user?.id}`);
+      if (cached) return cached;
+    } catch {}
+    return null;
+  });
+  const [isAuthorized, setIsAuthorized] = useState(() => {
+    const email = (session?.user?.email || "").toLowerCase().trim();
+    if (email === "dp844771@gmail.com") return true;
+    try {
+      const cached = localStorage.getItem(`iict_staff_role_${session?.user?.id}`);
+      if (cached) return true;
+    } catch {}
+    return null;
+  });
   const [error, setError] = useState("");
   const [newTeacherEmail, setNewTeacherEmail] = useState("");
   const [newTeacherName, setNewTeacherName] = useState("");
@@ -199,13 +215,21 @@ export function Dashboard({ session, onExit, onOpenTracker }) {
 
       // 4. Enforce strict authorization gate: NO auto-assignment!
       if (!activeRole && currentEmail !== "dp844771@gmail.com") {
+        try {
+          if (session?.user?.id) localStorage.removeItem(`iict_staff_role_${session.user.id}`);
+        } catch {}
         setIsAuthorized(false);
         setUserRole(null);
         return;
       }
 
+      const verifiedRole = currentEmail === "dp844771@gmail.com" ? "super_admin" : (activeRole || "teacher");
+      try {
+        if (session?.user?.id) localStorage.setItem(`iict_staff_role_${session.user.id}`, verifiedRole);
+      } catch {}
+
       setIsAuthorized(true);
-      setUserRole(currentEmail === "dp844771@gmail.com" ? "super_admin" : (activeRole || "teacher"));
+      setUserRole(verifiedRole);
       setError("");
 
       // 5. Load inquiries (protected by RLS, excluding synthetic demo fixtures)

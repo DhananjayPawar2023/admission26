@@ -22,7 +22,6 @@ export function AnimatedMgmLogo({ onClick }) {
       <div className="mgm-brand-titles">
         <div className="mgm-brand-row">
           <span className="mgm-brand-univ">MGM UNIVERSITY</span>
-          <span className="mgm-brand-badge">NAAC &apos;A&apos; GRADE</span>
         </div>
         <span className="mgm-brand-inst">Institute of Information &amp; Communication Technology (IICT)</span>
       </div>

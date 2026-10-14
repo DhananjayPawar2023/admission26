@@ -219,11 +219,13 @@ export function InquiryReviewModal({
               disabled={isSubmitting}
             >
               <option value="">-- Select your preferred program --</option>
-              {programs.map((p) => (
-                <option key={p.id} value={p.name}>
-                  {p.name} ({formatCurrency(p.annual_tuition_fee)}/yr)
-                </option>
-              ))}
+              {programs
+                .filter((p) => p.id !== "diploma-cyber" && !/cyber\s*security.*digital\s*forensics/i.test(p.name))
+                .map((p) => (
+                  <option key={p.id} value={p.name}>
+                    {p.name} ({formatCurrency(p.annual_tuition_fee)}/yr)
+                  </option>
+                ))}
             </select>
           </div>
 

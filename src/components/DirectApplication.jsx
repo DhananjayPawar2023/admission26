@@ -32,7 +32,12 @@ export function DirectApplication({
   onStaff,
   session
 }) {
-  const [selectedProgram, setSelectedProgram] = useState(() => initialProgram || "");
+  const [selectedProgram, setSelectedProgram] = useState(() => {
+    if (initialProgram && !/cyber\s*security.*digital\s*forensics/i.test(initialProgram) && initialProgram !== "Diploma in Cyber Security and Digital Forensics") {
+      return initialProgram;
+    }
+    return "";
+  });
   const [candidateName, setCandidateName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -58,7 +63,11 @@ export function DirectApplication({
 
   useEffect(() => {
     if (initialProgram) {
-      setSelectedProgram(initialProgram);
+      if (/cyber\s*security.*digital\s*forensics/i.test(initialProgram) || initialProgram === "Diploma in Cyber Security and Digital Forensics") {
+        setSelectedProgram("");
+      } else {
+        setSelectedProgram(initialProgram);
+      }
     }
   }, [initialProgram]);
 
@@ -233,11 +242,13 @@ export function DirectApplication({
                 required
               >
                 <option value="">— Select an Academic Program —</option>
-                {programs.map((prog) => (
-                  <option key={prog.id} value={prog.name}>
-                    {prog.name} ({prog.degree} · {prog.duration})
-                  </option>
-                ))}
+                {programs
+                  .filter((prog) => prog.id !== "diploma-cyber" && !/cyber\s*security.*digital\s*forensics/i.test(prog.name))
+                  .map((prog) => (
+                    <option key={prog.id} value={prog.name}>
+                      {prog.name} ({prog.degree} · {prog.duration})
+                    </option>
+                  ))}
               </select>
               {!selectedProgram && (
                 <span className="field-hint warning">
