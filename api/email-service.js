@@ -369,6 +369,103 @@ MGM University, Chhatrapati Sambhajinagar, Maharashtra
 }
 
 /**
+ * Builds HTML and plain text for Staff Access Onboarding Credentials
+ */
+export function buildStaffGrantEmail({ staffName, email, role, department, password }) {
+  const portalUrl = process.env.PUBLIC_APP_URL ? `${process.env.PUBLIC_APP_URL}/staff` : "https://admission.mgmu.ac.in/staff";
+  const roleTitle = role === "teacher" ? "Faculty Teacher" : role === "counsellor" ? "Admissions Counsellor" : role === "super_admin" ? "Super Admin" : "Admissions Admin";
+  const subject = `MGM University IICT: Admissions Staff Access Activated [${roleTitle}]`;
+
+  const text = `
+Dear ${staffName || "Faculty Member"},
+
+Greetings from the Directorate of Admissions, MGM University Institute of Information and Communication Technology (IICT).
+
+You have been granted official staff access to the MGM University Admissions Portal as ${roleTitle}.
+
+STAFF LOGIN CREDENTIALS:
+Portal Sign-In URL: ${portalUrl}
+Registered Email: ${email}
+Assigned Role: ${roleTitle}
+Department: ${department || "IICT Faculty"}
+Initial Password: ${password || "MGMU@2026"}
+
+RESPONSIBILITIES & ACCESS:
+- Review candidate dossiers and direct online applications.
+- Verify 10th/12th marksheets and entrance exam scorecards.
+- Update academic scrutiny notes and candidate status.
+- Respond to admissions inquiries and counsel prospective students.
+
+Please visit ${portalUrl} to sign in and begin accessing your admissions dashboard.
+
+Directorate of Admissions
+MGM University Campus, Chhatrapati Sambhajinagar, Maharashtra
+Helpline: +91 940 449 4299
+`.trim();
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(subject)}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #001E32;">
+  <div style="max-width: 600px; margin: 20px auto; background-color: #ffffff; border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,30,50,0.04);">
+    <div style="background-color: #001E32; padding: 24px 30px; text-align: left; border-bottom: 3px solid #C05A21;">
+      <h1 style="margin: 0; font-size: 18px; color: #ffffff; font-weight: 700; letter-spacing: 0.5px;">MGM UNIVERSITY</h1>
+      <p style="margin: 4px 0 0; font-size: 13px; color: #CBD5E1;">Institute of Information & Communication Technology (IICT)</p>
+    </div>
+    <div style="padding: 30px;">
+      <p style="font-size: 15px; line-height: 1.5; margin-top: 0;">Dear <strong>${escapeHtml(staffName || "Faculty Member")}</strong>,</p>
+      <p style="font-size: 14px; line-height: 1.6; color: #334155;">
+        You have been granted official staff credentials for the <strong>MGM University IICT Admissions Portal</strong>. Your account is active and ready for login.
+      </p>
+      <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 18px; margin: 20px 0;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+          <tr>
+            <td style="padding: 6px 0; color: #64748B; width: 40%;">Portal Sign-In:</td>
+            <td style="padding: 6px 0; font-weight: 600; color: #001E32;"><a href="${escapeHtml(portalUrl)}" style="color: #C05A21; text-decoration: none;">${escapeHtml(portalUrl)}</a></td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748B;">Registered Email:</td>
+            <td style="padding: 6px 0; font-weight: 700; color: #001E32;">${escapeHtml(email)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748B;">Assigned Role:</td>
+            <td style="padding: 6px 0; font-weight: 600; color: #001E32;">${escapeHtml(roleTitle)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748B;">Department:</td>
+            <td style="padding: 6px 0; font-weight: 600; color: #001E32;">${escapeHtml(department || "IICT Faculty")}</td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748B;">Initial Password:</td>
+            <td style="padding: 6px 0; font-family: monospace; font-size: 14px; font-weight: 700; color: #C05A21;">${escapeHtml(password || "MGMU@2026")}</td>
+          </tr>
+        </table>
+      </div>
+      <div style="text-align: center; margin: 28px 0 10px;">
+        <a href="${escapeHtml(portalUrl)}" style="display: inline-block; background-color: #001E32; color: #ffffff; text-decoration: none; padding: 12px 26px; border-radius: 6px; font-weight: 600; font-size: 13px;">
+          Sign In to Staff Portal &rarr;
+        </a>
+      </div>
+    </div>
+    <div style="background-color: #F1F5F9; padding: 20px 30px; font-size: 11.5px; color: #64748B; line-height: 1.5; border-top: 1px solid #E2E8F0;">
+      <p style="margin: 0;"><strong>IICT Admissions Directorate</strong> &middot; MGM University Campus</p>
+      <p style="margin: 4px 0 0;">Helpline: +91 940 449 4299 (10 AM &ndash; 5 PM) &middot; admissions@mgmu.ac.in</p>
+      <p style="margin: 4px 0 0;">Chhatrapati Sambhajinagar, Maharashtra 431003</p>
+    </div>
+  </div>
+</body>
+</html>
+`.trim();
+
+  return { subject, text, html };
+}
+
+/**
  * Sends an email notification using configured server provider
  * Supports: Resend REST API, Test Mode (dry run/mock), or Graceful Unconfigured State.
  */
@@ -443,6 +540,71 @@ export async function sendEmailNotification({
         };
       } else {
         const errorMsg = data?.message || data?.error || `Resend API error (HTTP ${response.status})`;
+
+        // Resend Sandbox Restriction Detection:
+        // Free tier unverified domains can only send to the account owner email address.
+        const isSandboxRestricted =
+          typeof errorMsg === "string" &&
+          (errorMsg.includes("You can only send testing emails to your own email address") ||
+           errorMsg.includes("verify a domain at resend.com/domains"));
+
+        if (isSandboxRestricted) {
+          const emailMatch = errorMsg.match(/\(([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\)/);
+          const sandboxEmail = (emailMatch ? emailMatch[1] : (process.env.RESEND_SANDBOX_EMAIL || "dp844771@gmail.com")).trim().toLowerCase();
+
+          if (cleanEmail !== sandboxEmail) {
+            const sandboxBanner = `
+              <div style="margin: 0 0 20px 0; padding: 14px 18px; background-color: #FEF3C7; border: 1px solid #F59E0B; border-left: 5px solid #D97706; border-radius: 6px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-weight: 700; color: #92400E; font-size: 13px; margin-bottom: 4px;">
+                  ⚠️ [MGM University Admissions Sandbox Delivery · Applicant Copy]
+                </div>
+                <div style="font-size: 12.5px; color: #78350F; line-height: 1.5;">
+                  <strong>Intended Recipient:</strong> ${cleanEmail}<br/>
+                  <strong>Delivery Route:</strong> Resend Developer Sandbox (routed to verified account inbox <code>${sandboxEmail}</code>).<br/>
+                  <em>Note: When a custom domain (e.g. <code>@mgmu.ac.in</code>) is verified in Resend, emails deliver directly to student inboxes.</em>
+                </div>
+              </div>
+            `;
+            const sandboxHtml = html ? `${sandboxBanner}\n${html}` : undefined;
+            const sandboxText = `[SANDBOX PREVIEW · INTENDED FOR: ${cleanEmail}]\nDelivered to verified sandbox inbox: ${sandboxEmail}\n----------------------------------------\n\n${text || ""}`;
+            const sandboxSubject = `[Sandbox Delivery · For: ${cleanEmail}] ${subject}`;
+
+            try {
+              const retryResponse = await fetchFn("https://api.resend.com/emails", {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${resendApiKey}`,
+                  "Content-Type": "application/json",
+                  ...(idempotencyKey ? { "Idempotency-Key": `${idempotencyKey}-sb` } : {})
+                },
+                body: JSON.stringify({
+                  from: fromEmail,
+                  to: [sandboxEmail],
+                  subject: sandboxSubject,
+                  html: sandboxHtml,
+                  text: sandboxText
+                })
+              });
+
+              const retryData = await retryResponse.json().catch(() => ({}));
+              if (retryResponse.ok) {
+                return {
+                  delivered: true,
+                  status: "sent",
+                  provider: "resend",
+                  id: retryData?.id,
+                  sandboxRouted: true,
+                  intendedRecipient: cleanEmail,
+                  actualRecipient: sandboxEmail,
+                  message: `[Sandbox Delivery] Notification successfully delivered to verified sandbox inbox (${sandboxEmail}) for applicant ${cleanEmail}.`
+                };
+              }
+            } catch (retryErr) {
+              console.warn("Sandbox fallback delivery failed:", retryErr.message);
+            }
+          }
+        }
+
         return {
           delivered: false,
           status: "failed",

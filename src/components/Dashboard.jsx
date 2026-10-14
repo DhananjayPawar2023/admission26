@@ -653,10 +653,14 @@ Please sign in at ${portalUrl} to review direct applications, verify student rec
     if (!status) return null;
 
     if (status === "sent" || status === "mock_sent") {
+      const isSandbox = feedback?.sandboxRouted || app.notification_sandbox_routed || feedback?.message?.includes("Sandbox");
       return (
-        <div className="notification-status-row sent" title={`Notification delivered to ${app.email}`}>
+        <div
+          className="notification-status-row sent"
+          title={isSandbox ? `Sandbox Mode: Notification delivered to verified sandbox inbox (dp844771@gmail.com) for applicant ${app.email}` : `Notification delivered to ${app.email}`}
+        >
           <MailCheck size={12} color="#15803D" />
-          <span>Email Sent</span>
+          <span>{isSandbox ? "Email Sent (Sandbox)" : "Email Sent"}</span>
         </div>
       );
     }
@@ -719,10 +723,14 @@ Please sign in at ${portalUrl} to review direct applications, verify student rec
     if (!status && !lead.last_reply_sent_at) return null;
 
     if (status === "sent" || status === "mock_sent") {
+      const isSandbox = feedback?.sandboxRouted || lead.notification_sandbox_routed || feedback?.message?.includes("Sandbox");
       return (
-        <div className="notification-status-row sent">
+        <div
+          className="notification-status-row sent"
+          title={isSandbox ? `Sandbox Mode: Reply forwarded to verified sandbox inbox for student ${lead.email}` : `Reply delivered to ${lead.email}`}
+        >
           <MailCheck size={12} color="#15803D" />
-          <span>Reply delivered to {lead.email}</span>
+          <span>{isSandbox ? "Reply Sent (Sandbox)" : `Reply delivered to ${lead.email}`}</span>
         </div>
       );
     }
@@ -810,7 +818,68 @@ Please sign in at ${portalUrl} to review direct applications, verify student rec
     setGranting(true);
     setGrantMsg("");
 
-    // 1. Direct Supabase RPC
+    // 1. Serverless /api/grant-staff endpoint with Bearer token
+    // Creates Supabase Auth user, activates staff_profiles, and dispatches onboarding credentials email
+    try {
+      const token = session?.access_token;
+      const apiResponse = await fetch("/api/grant-staff", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : ""
+        },
+        body: JSON.stringify({
+          email: cleanEmail,
+          displayName: cleanName,
+          role: newTeacherRole,
+          department: newTeacherDept,
+          password: newTeacherPassword || "MGMU@2026"
+        })
+      });
+
+      let resJson = null;
+      try {
+        resJson = await apiResponse.json();
+      } catch {}
+
+      if (apiResponse.ok && resJson?.success) {
+        setGrantMsg(resJson.message || "Staff access granted successfully!");
+        setLastGrantedStaff({
+          name: cleanName,
+          email: cleanEmail,
+          role: newTeacherRole,
+          department: newTeacherDept,
+          password: newTeacherPassword || "MGMU@2026",
+          emailDelivery: resJson.emailDelivery
+        });
+        setStaffActionBanner({
+          type: "success",
+          message: `Staff access successfully granted to ${cleanName} (${cleanEmail}). Role: ${newTeacherRole}. Onboarding email sent!`
+        });
+        const { data: refreshed } = await supabase
+          .from("staff_profiles")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (refreshed) setStaffList(refreshed);
+        setNewTeacherEmail("");
+        setNewTeacherName("");
+        setNewTeacherPassword("MGMU@2026");
+        setGranting(false);
+        checkApiHealth();
+        return;
+      }
+
+      if (resJson?.error) {
+        setGrantMsg(`Notice: ${resJson.error}`);
+        setStaffActionBanner({ type: "error", message: resJson.error });
+        setGranting(false);
+        return;
+      }
+    } catch (apiErr) {
+      console.warn("Server grant-staff notice, falling back to direct RPC:", apiErr);
+    }
+
+    // 2. Direct Supabase RPC fallback
     if (supabase) {
       try {
         const { data: rpcRes, error: rpcErr } = await supabase.rpc("grant_staff_access_by_email", {
@@ -846,69 +915,12 @@ Please sign in at ${portalUrl} to review direct applications, verify student rec
         }
 
         if (rpcErr) {
-          console.warn("Direct RPC note (falling through to serverless grant):", rpcErr.message);
+          console.warn("Direct RPC note:", rpcErr.message);
         }
       } catch (err) {
         console.warn("Direct RPC error:", err);
       }
     }
-
-    // 2. Serverless /api/grant-staff endpoint with Bearer token
-    try {
-      const token = session?.access_token;
-      const apiResponse = await fetch("/api/grant-staff", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: token ? `Bearer ${token}` : ""
-        },
-        body: JSON.stringify({
-          email: cleanEmail,
-          displayName: cleanName,
-          role: newTeacherRole,
-          department: newTeacherDept,
-          password: newTeacherPassword || "MGMU@2026"
-        })
-      });
-
-      let resJson = null;
-      try {
-        resJson = await apiResponse.json();
-      } catch {}
-
-      if (apiResponse.ok && resJson?.success) {
-        setGrantMsg(resJson.message || "Staff access granted successfully!");
-        setLastGrantedStaff({
-          name: cleanName,
-          email: cleanEmail,
-          role: newTeacherRole,
-          department: newTeacherDept,
-          password: newTeacherPassword || "MGMU@2026"
-        });
-        setStaffActionBanner({
-          type: "success",
-          message: `Staff access successfully granted to ${cleanName} (${cleanEmail}). Role: ${newTeacherRole}.`
-        });
-        const { data: refreshed } = await supabase
-          .from("staff_profiles")
-          .select("*")
-          .order("created_at", { ascending: false });
-        if (refreshed) setStaffList(refreshed);
-        setNewTeacherEmail("");
-        setNewTeacherName("");
-        setNewTeacherPassword("MGMU@2026");
-        setGranting(false);
-        checkApiHealth();
-        return;
-      }
-
-      if (resJson?.error) {
-        setGrantMsg(`Notice: ${resJson.error}`);
-        setStaffActionBanner({ type: "error", message: resJson.error });
-        setGranting(false);
-        return;
-      }
-    } catch {}
 
     setGrantMsg("Notice: Please ensure you are logged in as Super Admin.");
     setGranting(false);
@@ -2185,17 +2197,20 @@ Please sign in at ${portalUrl} to review direct applications, verify student rec
                             </td>
 
                             <td>
-                              <select
-                                value={lead.status || "new"}
-                                onChange={(e) => updateLeadStatus(lead.id, e.target.value, leadNotesState[lead.id] || lead.counselor_notes)}
-                                className={`status-select-badge ${lead.status || "new"}`}
-                                style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11.5px", fontWeight: 600 }}
-                              >
-                                <option value="new">New</option>
-                                <option value="contacted">Contacted</option>
-                                <option value="qualified">Qualified</option>
-                                <option value="closed">Closed</option>
-                              </select>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                <select
+                                  value={lead.status || "new"}
+                                  onChange={(e) => updateLeadStatus(lead.id, e.target.value, leadNotesState[lead.id] || lead.counselor_notes)}
+                                  className={`status-select-badge ${lead.status || "new"}`}
+                                  style={{ padding: "4px 8px", borderRadius: "5px", fontSize: "11.5px", fontWeight: 600 }}
+                                >
+                                  <option value="new">New</option>
+                                  <option value="contacted">Contacted</option>
+                                  <option value="qualified">Qualified</option>
+                                  <option value="closed">Closed</option>
+                                </select>
+                                {renderInquiryReplyStatus(lead)}
+                              </div>
                             </td>
 
                             <td>
@@ -2208,6 +2223,25 @@ Please sign in at ${portalUrl} to review direct applications, verify student rec
                                   title="View full candidate profile"
                                 >
                                   <Eye size={12} /> View
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => setSelectedInquiryModal(lead)}
+                                  style={{
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    background: "#EFF6FF",
+                                    borderColor: "#BFDBFE",
+                                    color: "#1D4ED8",
+                                    fontWeight: 600
+                                  }}
+                                  title="Reply to student inquiry and send email"
+                                >
+                                  <Mail size={12} /> Email Reply
                                 </button>
                                 <button
                                   type="button"

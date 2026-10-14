@@ -251,6 +251,9 @@ export default async function handler(req, res, { supabaseAdminClient, emailClie
         status: emailResult.status,
         delivered: emailResult.delivered,
         provider: emailResult.provider,
+        sandboxRouted: Boolean(emailResult.sandboxRouted),
+        intendedRecipient: emailResult.intendedRecipient || null,
+        actualRecipient: emailResult.actualRecipient || null,
         message: emailResult.message,
         error: emailResult.error || null
       }

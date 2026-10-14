@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildApplicationStatusEmail,
   buildInquiryReplyEmail,
+  buildStaffGrantEmail,
   sendEmailNotification,
   getStatusDetails
 } from "../api/email-service.js";
@@ -86,6 +87,25 @@ test("Inquiry Reply Email: includes reply message and does NOT include full tran
   assert.ok(email.html.includes("Admissions Advisor Reply"));
 });
 
+test("Staff Grant Email: includes portal URL, assigned role, registered email and password", () => {
+  const email = buildStaffGrantEmail({
+    staffName: "Prof. Rajesh Sharma",
+    email: "sharma@mgmu.ac.in",
+    role: "teacher",
+    department: "Computer Science & Engineering",
+    password: "TempPassword#2026"
+  });
+
+  assert.ok(email.subject.includes("Faculty Teacher"));
+  assert.ok(email.text.includes("Prof. Rajesh Sharma"));
+  assert.ok(email.text.includes("sharma@mgmu.ac.in"));
+  assert.ok(email.text.includes("Faculty Teacher"));
+  assert.ok(email.text.includes("Computer Science & Engineering"));
+  assert.ok(email.text.includes("TempPassword#2026"));
+  assert.ok(email.html.includes("TempPassword#2026"));
+  assert.ok(email.html.includes("/staff"));
+});
+
 // ── 2. Unit Tests for Email Service & Delivery Provider ────────────────────────
 test("Email Service: test mode / dry run returns mock_sent without network send", async () => {
   const result = await sendEmailNotification({
@@ -98,6 +118,58 @@ test("Email Service: test mode / dry run returns mock_sent without network send"
   assert.equal(result.delivered, true);
   assert.equal(result.status, "mock_sent");
   assert.equal(result.provider, "mock");
+});
+
+test("Email Service: sandbox fallback routes unverified recipients to verified sandbox inbox with notice", async () => {
+  const calls = [];
+  const customFetch = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    if (calls.length === 1) {
+      // First attempt to non-account email returns Resend 403 sandbox restriction
+      return {
+        ok: false,
+        status: 403,
+        json: async () => ({
+          statusCode: 403,
+          message: "You can only send testing emails to your own email address (dp844771@gmail.com). To send emails to other recipients, please verify a domain at resend.com/domains, and change the 'from' address to an email using this domain."
+        })
+      };
+    }
+    // Second attempt to dp844771@gmail.com succeeds
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "resend-sb-test-uuid" })
+    };
+  };
+
+  const originalKey = process.env.RESEND_API_KEY;
+  process.env.RESEND_API_KEY = "re_test_key_12345";
+
+  const result = await sendEmailNotification({
+    to: "student@somedomain.com",
+    subject: "MGM University IICT: Application Update",
+    html: "<p>Your application is under committee scrutiny.</p>",
+    text: "Your application is under committee scrutiny.",
+    testMode: false,
+    customFetch
+  });
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.status, "sent");
+  assert.equal(result.sandboxRouted, true);
+  assert.equal(result.intendedRecipient, "student@somedomain.com");
+  assert.equal(result.actualRecipient, "dp844771@gmail.com");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body.to, ["dp844771@gmail.com"]);
+  assert.ok(calls[1].body.subject.includes("[Sandbox Delivery · For: student@somedomain.com]"));
+  assert.ok(calls[1].body.html.includes("Sandbox Delivery"));
+
+  if (originalKey) {
+    process.env.RESEND_API_KEY = originalKey;
+  } else {
+    delete process.env.RESEND_API_KEY;
+  }
 });
 
 test("Email Service: reports not_configured gracefully when server secret is absent", async () => {

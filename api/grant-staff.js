@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { getServiceRoleKey, getSupabaseUrl } from "./env-helper.js";
+import { buildStaffGrantEmail, sendEmailNotification } from "./email-service.js";
 
-export default async function handler(req, res, { supabaseAdminClient } = {}) {
+export default async function handler(req, res, { supabaseAdminClient, emailClient } = {}) {
   res.setHeader("Access-Control-Allow-Credentials", true);
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,POST");
@@ -200,12 +201,63 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
         await supabaseAdmin.from("pending_staff_invites").delete().eq("email", cleanEmail);
       } catch {}
 
+      // Dispatch onboarding credentials email to the granted staff member
+      let emailResult = null;
+      try {
+        const emailContent = buildStaffGrantEmail({
+          staffName: cleanName,
+          email: cleanEmail,
+          role,
+          department,
+          password: assignedPassword
+        });
+
+        if (emailClient && typeof emailClient.sendEmail === "function") {
+          emailResult = await emailClient.sendEmail({
+            to: cleanEmail,
+            subject: emailContent.subject,
+            html: emailContent.html,
+            text: emailContent.text
+          });
+        } else {
+          emailResult = await sendEmailNotification({
+            to: cleanEmail,
+            subject: emailContent.subject,
+            html: emailContent.html,
+            text: emailContent.text,
+            idempotencyKey: `staff-grant-${cleanEmail}-${Date.now()}`
+          });
+        }
+
+        try {
+          await supabaseAdmin.from("notification_logs").insert({
+            recipient_email: cleanEmail,
+            notification_type: "staff_onboarding_credentials",
+            reference_id: targetUser.id,
+            subject: emailContent.subject,
+            body_preview: emailContent.text.slice(0, 300),
+            status: emailResult.status || "failed",
+            provider: emailResult.provider || "none",
+            error_message: emailResult.error || null,
+            sent_by: callerId || null
+          });
+        } catch {}
+      } catch (emailErr) {
+        console.warn("Staff onboarding email dispatch note:", emailErr.message);
+      }
+
       return res.status(200).json({
         success: true,
         status: "granted",
         directAccess: true,
         temporaryPassword: assignedPassword,
-        message: `Direct access granted! ${cleanName} (${cleanEmail}) is now active as ${role}. Default temporary password: ${assignedPassword}`,
+        emailDelivery: emailResult ? {
+          status: emailResult.status,
+          delivered: emailResult.delivered,
+          provider: emailResult.provider,
+          message: emailResult.message
+        } : null,
+        message: `Direct access granted! ${cleanName} (${cleanEmail}) is now active as ${role}. Default temporary password: ${assignedPassword}. Credentials email dispatched.`,
         user: {
           id: targetUser.id,
           email: cleanEmail,
@@ -226,11 +278,46 @@ export default async function handler(req, res, { supabaseAdminClient } = {}) {
         { onConflict: "email" }
       );
 
+      // Dispatch onboarding notification
+      let emailResult = null;
+      try {
+        const emailContent = buildStaffGrantEmail({
+          staffName: cleanName,
+          email: cleanEmail,
+          role,
+          department,
+          password: assignedPassword
+        });
+
+        if (emailClient && typeof emailClient.sendEmail === "function") {
+          emailResult = await emailClient.sendEmail({
+            to: cleanEmail,
+            subject: emailContent.subject,
+            html: emailContent.html,
+            text: emailContent.text
+          });
+        } else {
+          emailResult = await sendEmailNotification({
+            to: cleanEmail,
+            subject: emailContent.subject,
+            html: emailContent.html,
+            text: emailContent.text,
+            idempotencyKey: `staff-invite-${cleanEmail}-${Date.now()}`
+          });
+        }
+      } catch {}
+
       return res.status(200).json({
         success: true,
         status: "granted",
         directAccess: true,
-        message: `Staff access authorized for ${cleanName} (${cleanEmail}). When they sign in with ${cleanEmail}, their account will activate directly.`,
+        emailDelivery: emailResult ? {
+          status: emailResult.status,
+          delivered: emailResult.delivered,
+          provider: emailResult.provider,
+          message: emailResult.message
+        } : null,
+        message: `Staff access authorized for ${cleanName} (${cleanEmail}). When they sign in with ${cleanEmail}, their account will activate directly. Credentials email dispatched.`,
         email: cleanEmail
       });
     }
